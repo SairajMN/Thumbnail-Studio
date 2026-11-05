@@ -1,0 +1,23 @@
+[project]
+name = "thumbnail-studio"
+version = "0.1.0"
+description = "Reel covers that make people watch: a picked frame and the video's context in, a cover in the game's own look out."
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "python-multipart>=0.0.12",
+  "pydantic-settings>=2.6",
+  "httpx>=0.28",
+  "pillow>=13.0.0",
+  "numpy>=2.5.4",
+  "opencv-python-headless>=5.0.0.93",
+  "pytesseract>=0.3.13",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

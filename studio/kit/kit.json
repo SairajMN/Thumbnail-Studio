@@ -1,0 +1,117 @@
+{
+  "_note": "PEGI labels and verified game ratings, copied from Guideline Copilot's brand kit (guidelines/playstation/v1/brand_assets). A cover shows a game's label only when this list has that game's rating.",
+  "images": {
+    "pegi_12": {
+      "file": "pegi_12.jpg",
+      "label": "PEGI 12 age rating label",
+      "source": "https://pegi.info/what-do-the-labels-mean",
+      "added": "2026-10-26"
+    },
+    "pegi_16": {
+      "file": "pegi_16.jpg",
+      "label": "PEGI 16 age rating label",
+      "source": "https://pegi.info/what-do-the-labels-mean",
+      "added": "2026-10-26"
+    },
+    "pegi_18": {
+      "file": "pegi_18.jpg",
+      "label": "PEGI 18 age rating label",
+      "source": "https://pegi.info/what-do-the-labels-mean",
+      "added": "2026-10-26"
+    }
+  },
+  "game_ratings": [
+    {
+      "game": "007 First Light",
+      "system": "PEGI",
+      "rating": 16,
+      "image": "pegi_16",
+      "source": "https://pegi.info/search-pegi?q=007+First+Light",
+      "checked": "2026-10-26",
+      "aliases": [
+        "007",
+        "first light"
+      ]
+    },
+    {
+      "game": "Kingdom Come: Deliverance II",
+      "system": "PEGI",
+      "rating": 18,
+      "image": "pegi_18",
+      "source": "https://pegi.info/search-pegi?q=Deliverance+II",
+      "checked": "2026-10-26",
+      "aliases": [
+        "deliverance"
+      ]
+    },
+    {
+      "game": "Marvel Tokon: Fighting Souls",
+      "system": "PEGI",
+      "rating": 12,
+      "image": "pegi_12",
+      "source": "https://pegi.info/search-pegi?q=Tokon",
+      "checked": "2026-10-26",
+      "aliases": [
+        "tokon",
+        "marvel"
+      ]
+    },
+    {
+      "game": "LEGO Batman: Legacy of the Dark Knight",
+      "system": "PEGI",
+      "rating": null,
+      "image": null,
+      "source": "https://pegi.info/search-pegi?q=Legacy+of+the+Dark+Knight",
+      "checked": "2026-10-26",
+      "note": "Not rated by PEGI yet: show no rating label for it.",
+      "aliases": [
+        "lego batman",
+        "batman"
+      ]
+    },
+    {
+      "game": "Marvel's Spider-Man 2",
+      "system": "PEGI",
+      "rating": 16,
+      "image": "pegi_16",
+      "source": "https://pegi.info/search-pegi?q=Spider-Man+2",
+      "checked": "2026-10-29",
+      "note": "PlayStation 5, released 20/10/2023; strong violence",
+      "aliases": [
+        "spider-man 2",
+        "spider-man"
+      ]
+    },
+    {
+      "game": "Yakuza Kiwami 3 & Dark Ties",
+      "system": "PEGI",
+      "rating": 18,
+      "image": "pegi_18",
+      "source": "https://pegi.info/search-pegi?q=Yakuza+Kiwami+3",
+      "checked": "2026-11-01",
+      "note": "PEGI 18: violence, bad language, gambling, in-game purchases",
+      "aliases": [
+        "yakuza kiwami 3",
+        "kiwami 3",
+        "yakuza",
+        "like a dragon",
+        "dark ties"
+      ]
+    },
+    {
+      "game": "EA SPORTS FC 27",
+      "system": "PEGI",
+      "rating": 16,
+      "image": "pegi_16",
+      "source": "https://www.techtimes.com/articles/321605/20260725/ea-sports-fc-27-launches-sept-25-pc-specs-pegi-16-rating-denuvo.htm",
+      "checked": "2026-11-01",
+      "note": "PEGI 16 under PEGI's 2026 loot-box rules (up from PEGI 3), per press reports; PEGI's own search shows the game with a 16 icon but no listing text. Confirm on pegi.info before publishing.",
+      "aliases": [
+        "fc 27",
+        "fc27",
+        "ea sports fc",
+        "ea fc"
+      ]
+    }
+  ]
+}

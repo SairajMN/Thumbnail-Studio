@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thumbnail Studio</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg: #0f1115; --panel: #171a21; --line: #2a2f3a; --text: #e8eaf0; --muted: #9aa1b2; --accent: #4b8bff; --ok: #3ccf8e; --bad: #ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .grid { display: grid; gap: 20px; grid-template-columns: 1fr; }
+  @media (min-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); } }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .pair figure { margin: 0; } .pair figcaption { margin-top: 6px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  label.drop { display: grid; place-items: center; aspect-ratio: 9/16; max-width: 160px; border: 1px dashed var(--line); border-radius: 10px;
+    color: var(--muted); cursor: pointer; overflow: hidden; text-align: center; }
+  label.drop img { width: 100%; height: 100%; object-fit: cover; }
+  .row { display: flex; gap: 16px; align-items: flex-start; }
+  textarea, input[type=text] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
+  textarea { min-height: 150px; resize: vertical; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .muted { color: var(--muted); } .small { font-size: 12px; }
+  .models div { display: flex; justify-content: space-between; gap: 8px; }
+  .error { color: var(--bad); white-space: pre-wrap; }
+  .pair img { width: 100%; border-radius: 10px; display: block; }
+  .pair.grid34 img { aspect-ratio: 3/4; object-fit: cover; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; background: var(--accent); }
+  table { width: 100%; border-collapse: collapse; } td { padding: 4px 0; } td:last-child { text-align: right; }
+  .sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--line); vertical-align: -2px; margin-right: 4px; }
+  .checks li { margin: 2px 0; } .ok { color: var(--ok); } .bad { color: var(--bad); }
+  .fields { display: grid; gap: 8px; } .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .toggles { display: flex; flex-wrap: wrap; gap: 12px; }
+  .stack > * + * { margin-top: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Thumbnail Studio</h1>
+  <p class="sub">Pick a frame, paste what the video is about, get a cover that makes people watch: one with the subject cut out, one without.</p>
+  <div class="grid">
+    <form id="form" class="panel stack">
+      <div class="row">
+        <label class="drop" id="drop"><span>Choose the frame</span>
+          <input id="file" type="file" accept="image/png,image/jpeg,image/webp" hidden></label>
+        <div style="flex:1" class="stack">
+          <label>Video context <span class="muted small">caption, transcript, game, event (text or JSON)</span>
+            <textarea id="context" placeholder="Midnight launch of Marvel's Wolverine at our Sarjapur store. Fans queued from 10pm. Available now."></textarea></label>
+        </div>
+      </div>
+      <div id="models" class="models small"></div>
+      <div><button id="go" type="submit" disabled>Make cover</button> <span id="status" class="muted"></span></div>
+      <div id="error" class="error"></div>
+    </form>
+
+    <section id="result" class="panel stack" hidden>
+      <div id="pair" class="pair">
+        <figure><img id="img_cut" alt="Cover with the subject cut out">
+          <figcaption class="small"><b>With cut-out</b> · <a id="dl_cut" style="color:var(--accent)">Download</a>
+            <div id="chk_cut"></div></figcaption></figure>
+        <figure><img id="img_plain" alt="Cover without cut-out">
+          <figcaption class="small"><b>Without cut-out</b> · <a id="dl_plain" style="color:var(--accent)">Download</a>
+            <div id="chk_plain"></div></figcaption></figure>
+      </div>
+      <div id="cutNote" class="small muted"></div>
+      <label class="small"><input id="grid" type="checkbox"> Show as the profile grid crops it (3:4)</label>
+      <div id="game" class="small"></div>
+      <div id="budget"></div>
+      <table id="costs" class="small"></table>
+      <form id="edit" class="fields">
+        <input id="line1" type="text" placeholder="Small line" aria-label="Small line">
+        <input id="line2" type="text" placeholder="Big line" aria-label="Big line">
+        <div class="two"><input id="highlight" type="text" placeholder="Highlighted word" aria-label="Highlighted word">
+          <span></span></div>
+        <div class="two"><input id="pill_left" type="text" placeholder="Pill (Available)" aria-label="Pill first half">
+          <input id="pill_right" type="text" placeholder="Pill (Now)" aria-label="Pill second half"></div>
+        <div class="toggles small">
+          <label><input id="punch_in" type="checkbox"> Punch-in + grade</label>
+          <label><input id="arrow" type="checkbox"> Arrow on product</label>
+        </div>
+        <div><button type="submit" class="ghost">Update both</button></div>
+        <div id="editError" class="error"></div>
+      </form>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const usd = (n) => n === 0 ? "free" : n < 0.01 ? "$" + n.toFixed(4) : "$" + n.toFixed(2);
+const STAGES = { read: "Reading the frame", look: "Looking at the frame", write: "Writing the hook", draw: "Drawing the cover" };
+let frame = null, timer = null, current = null;
+
+async function api(path, init) {
+  const r = await fetch(path, init);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.statusText);
+  return body;
+}
+
+api("/api/options").then((o) => {
+  $("models").innerHTML = `<div><b>Nebius models</b><span class="muted">≈ ${usd(o.est_usd)} · budget ${usd(o.budget_usd)}</span></div>`
+    + o.models.map((m) => `<div><span>${m.step}: ${m.model}</span><span class="muted">${usd(m.est_usd)}</span></div>`).join("")
+    + `<p class="muted">Fallbacks: looking ${o.fallbacks.look.join(", ")}; writing ${o.fallbacks.write.join(", ")}. No call is made that could pass the budget.`
+    + (o.key_set ? "" : ` <span class="bad">NEBIUS_API_KEY is not set in .env.</span>`) + `</p>`;
+});
+
+$("drop").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => {
+  frame = e.target.files[0] || null;
+  $("drop").innerHTML = frame ? `<img src="${URL.createObjectURL(frame)}" alt="Picked frame">` : "<span>Choose the frame</span>";
+  $("go").disabled = !frame;
+});
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("error").textContent = "";
+  const fd = new FormData();
+  fd.append("frame", frame);
+  fd.append("context", $("context").value);
+  $("go").disabled = true;
+  try {
+    const c = await api("/api/covers", { method: "POST", body: fd });
+    history.replaceState(null, "", "?id=" + c.id);
+    poll(c.id);
+  } catch (err) { $("error").textContent = err.message; $("go").disabled = false; }
+});
+
+function poll(id) {
+  clearTimeout(timer);
+  api("/api/covers/" + id).then((c) => {
+    show(c);
+    if (c.status === "queued" || c.status === "running") timer = setTimeout(() => poll(id), 1500);
+    else $("go").disabled = !frame;
+  }).catch((err) => { $("error").textContent = err.message; });
+}
+
+function show(c) {
+  current = c;
+  const running = c.status === "queued" || c.status === "running";
+  $("status").textContent = running ? (STAGES[c.stage] || "Starting") + "…" : "";
+  $("error").textContent = c.status === "failed" ? c.error : "";
+  if (!c.images) return;
+  $("result").hidden = false;
+  for (const v of ["cut", "plain"]) {
+    $("img_" + v).src = c.images[v];
+    $("dl_" + v).href = c.images[v] + "&download=1";
+    const bad = (c.checks[v] || []).filter((k) => !k.ok);
+    $("chk_" + v).innerHTML = bad.length ? bad.map((k) => `<div class="bad">! ${k.detail}</div>`).join("")
+      : `<div class="ok">✓ All ${(c.checks[v] || []).length} checks pass</div>`;
+  }
+  $("cutNote").textContent = c.cut_available ? "" : "No person or product the video is about was found to cut out, so both versions are the same.";
+  const lk = c.look || {};
+  $("game").innerHTML = `<b>${lk.game || "No game found"}</b> `
+    + [lk.bg, lk.accent].filter(Boolean).map((h) => `<span class="sw" style="background:${h}"></span>${h}`).join(" ")
+    + (lk.hook ? `<div class="muted">Hook: ${lk.hook}</div>` : "") + (c.why ? `<div class="muted">${c.why}</div>` : "");
+  const pct = Math.min(100, c.used_usd / c.budget_usd * 100);
+  $("budget").innerHTML = `<div class="small" style="display:flex;justify-content:space-between"><span>Budget used</span>`
+    + `<span>${usd(c.used_usd)} of ${usd(c.budget_usd)} (${pct > 0 && pct < 1 ? "<1" : pct.toFixed(0)}%)</span></div>`
+    + `<div class="bar"><div style="width:${Math.max(pct, c.used_usd > 0 ? 1 : 0)}%;background:${pct > 90 ? "var(--bad)" : "var(--accent)"}"></div></div>`;
+  $("costs").innerHTML = c.costs.map((r) => `<tr><td>${r.step === "look" ? "Look" : "Write"}: ${r.model}${r.ok < r.calls ? ` <span class="bad">(${r.calls - r.ok} failed)</span>` : ""}</td><td>${usd(r.usd)}</td></tr>`).join("")
+    + `<tr><td>Read + draw: code</td><td>free</td></tr><tr><td><b>Total</b></td><td><b>${usd(c.used_usd)}</b></td></tr>`;
+  const s = c.spec;
+  for (const k of ["line1", "line2", "highlight", "pill_left", "pill_right"]) if (document.activeElement !== $(k)) $(k).value = s[k] || "";
+  for (const k of ["punch_in", "arrow"]) $(k).checked = s[k];
+}
+
+$("grid").addEventListener("change", (e) => $("pair").classList.toggle("grid34", e.target.checked));
+
+async function edit(changes) {
+  $("editError").textContent = "";
+  try { show(await api("/api/covers/" + current.id, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) })); }
+  catch (err) { $("editError").textContent = err.message; }
+}
+$("edit").addEventListener("submit", (e) => {
+  e.preventDefault();
+  edit(Object.fromEntries(["line1", "line2", "highlight", "pill_left", "pill_right"].map((k) => [k, $(k).value])));
+});
+for (const k of ["punch_in", "arrow"]) $(k).addEventListener("change", (e) => edit({ [k]: e.target.checked }));
+
+const id = new URLSearchParams(location.search).get("id");
+if (id) poll(id);
+</script>
+</body>
+</html>
