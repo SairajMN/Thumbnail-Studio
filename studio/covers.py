@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 from pydantic import BaseModel, Field
 
 from studio import design, designs, frame, kit, nebius, palette
@@ -60,6 +60,7 @@ class Words(BaseModel):
     pill_right: str | None = Field(description="CTA pill's second half, short ('Now', 'Today', 'This Week'); null for a one-part pill")
     name_tag: str | None = Field(description="a winner's name, only when the context names one")
     arrow: bool = Field(description="true to circle and point at the product in the frame, when it is the point of the video")
+    offer: str | None = Field(None, description="the price or offer, short ('20% OFF', '₹4,999'), only when the context states one; else null")
     why: str = Field(description="one short sentence: why this makes someone stop and watch")
 
 
@@ -106,6 +107,7 @@ What makes people stop:
 - emotion: excitement, surprise, urgency (but never fake urgency)
 Build the words on the hook and what the frame shows, so the cover is about this video, not any video. Prefer the
 specific over the generic: not "HAPPY CUSTOMER" when the video says what made them happy.
+offer: copy a price or offer the context states, short; null when it states none (never invent one).
 Rules: use only facts from the analysis and context (never invent a game, number, price, date, offer or name); a pill
 only when the context says the game or product is out, on pre-order or in stock; no emoji, hashtags or quotes.
 highlight is one word of line1. arrow is true only when the product is in the frame and is the point of the video.
@@ -164,7 +166,7 @@ def create(data: bytes, context: str) -> dict:
     c = {"id": cid, "created_at": datetime.now(UTC).isoformat(), "status": "queued", "stage": None, "error": None,
          "context": context.strip()[:20000], "budget_usd": settings.budget_usd, "calls": [], "facts": None, "faces": [],
          "look": None, "spec": None, "why": None, "checks": {}, "cut_available": False, "version": 0,
-         "history": [], "messages": []}
+         "history": [], "messages": [], "extras": []}
     with LOCK:
         save(c)
     return c
@@ -227,7 +229,7 @@ def recommend(picked: list[str], faces: list, product: list | None, facts: dict)
     return out
 
 
-WORD_FIELDS = ("template", "line1", "line2", "highlight", "pill_left", "pill_right", "name_tag", "arrow")
+WORD_FIELDS = ("template", "line1", "line2", "highlight", "pill_left", "pill_right", "name_tag", "arrow", "offer")
 
 
 def run(cid: str) -> None:
@@ -257,6 +259,9 @@ def run(cid: str) -> None:
         if not options:
             raise CoverError("the writer returned no headline; try again", 502)
         words = options[0]
+        if any(w.offer for w in options) and "offer" not in recommended:  # an offer in the video: the Offer design first
+            recommended = ["offer", *recommended][:3]
+            update(cid, recommended=recommended)
         spec = Spec(**words.model_dump(exclude={"why"}), design=recommended[0],
                     rating=kit.rating_for(f"{c['context']}\n{lk['game'] or ''}"), game=lk["game"], colors=game_colors(lk))
         update(cid, spec=spec.model_dump(), why=words.why, headlines=[w.model_dump() for w in options], headline=0, stage="draw")
@@ -285,9 +290,10 @@ def draw(cid: str) -> dict:
     mask = np.load(mask_file).astype(np.float32) if mask_file.exists() else None
     product = (c["look"] or {}).get("product")
     frame_img, checks, cut = Image.open(folder(cid) / "frame.png"), {}, False
+    extras = extra_images(c)
     for name, pop in VERSIONS.items():
         img, rep = design.draw(spec, frame_img, [tuple(f) for f in c["faces"]], mask,
-                               tuple(product) if product else None, kit.label_path(spec.rating), cut=pop)
+                               tuple(product) if product else None, kit.label_path(spec.rating), cut=pop, extras=extras)
         img.save(folder(cid) / f"cover-{name}.png", optimize=True)
         checks[name] = rep["checks"]
         cut = cut or rep["cut"]
@@ -295,6 +301,7 @@ def draw(cid: str) -> dict:
 
 
 EDITABLE = {"design", "colors", "line1", "line2", "highlight", "subline", "pill_left", "pill_right", "name_tag", "punch_in", "arrow", "wave", "rating",
+            "offer", "qr_url", "qr_label",
             "headline"}  # headline: the index of one of the written options, whose words replace the cover's
 
 
@@ -349,6 +356,77 @@ def undo(cid: str) -> dict:
     return draw(cid)
 
 
+MAX_EXTRAS = 3  # a collage shows the frame and up to 3 more images
+
+
+def extra_images(c: dict) -> list[tuple[Image.Image, list]]:
+    return [(Image.open(folder(c["id"]) / x["file"]), [tuple(f) for f in x["faces"]]) for x in c.get("extras") or []
+            if (folder(c["id"]) / x["file"]).exists()]
+
+
+def add_images(cid: str, files: list[bytes]) -> dict:
+    """Add images for a collage (up to 3 besides the frame); their faces are found here too, so none is covered."""
+    c = load(cid)
+    have = c.get("extras") or []
+    if len(have) + len(files) > MAX_EXTRAS:
+        raise CoverError(f"a collage takes up to {MAX_EXTRAS} images besides the frame")
+    for data in files:
+        if len(data) > MAX_FRAME_MB << 20:
+            raise CoverError(f"an image is over {MAX_FRAME_MB} MB", 413)
+        try:
+            img = Image.open(io.BytesIO(data))
+            img.load()
+        except Exception as e:
+            raise CoverError("one of the files is not an image (PNG, JPEG or WebP)") from e
+        name = f"extra-{uuid.uuid4().hex[:8]}.png"
+        img.convert("RGB").save(folder(cid) / name)
+        have = [*have, {"file": name, "faces": [list(f) for f in frame.faces(img)]}]
+    update(cid, extras=have)
+    return draw(cid) if c.get("spec") else load(cid)
+
+
+def clear_images(cid: str) -> dict:
+    c = load(cid)
+    for x in c.get("extras") or []:
+        (folder(cid) / x["file"]).unlink(missing_ok=True)
+    update(cid, extras=[])
+    return draw(cid) if c.get("spec") else load(cid)
+
+
+SIZES = {"reel": (1080, 1920), "feed": (1080, 1350), "square": (1080, 1080), "youtube": (1280, 720)}
+
+
+def export(cid: str, size: str, version: str) -> Path:
+    """The cover at another size. The reel cover is the design itself; the others place its grid-safe middle (where
+    every word and mark is) on a blurred copy of the cover filling the new shape: no word is cut, no new layout."""
+    if size not in SIZES or version not in VERSIONS:
+        raise CoverError("no such size or version", 404)
+    c = load(cid)
+    src = folder(cid) / f"cover-{version}.png"
+    if not src.exists():
+        raise CoverError("not drawn yet", 404)
+    if size == "reel":
+        return src
+    out = folder(cid) / "exports" / f"{size}-{version}-v{c['version']}.png"
+    if out.exists():
+        return out
+    out.parent.mkdir(exist_ok=True)
+    tw, th = SIZES[size]
+    cover = Image.open(src).convert("RGB")
+    middle = cover.crop((0, design.SAFE[1] - 40, cover.width, design.SAFE[3] + 40))
+    k = min(tw / middle.width, th / middle.height)
+    fg = middle.resize((round(middle.width * k), round(middle.height * k)), Image.LANCZOS)
+    kb = max(tw / cover.width, th / cover.height)
+    bg = cover.resize((round(cover.width * kb), round(cover.height * kb)), Image.LANCZOS)
+    bg = bg.crop(((bg.width - tw) // 2, (bg.height - th) // 2, (bg.width - tw) // 2 + tw, (bg.height - th) // 2 + th))
+    bg = Image.eval(bg.filter(ImageFilter.GaussianBlur(36)), lambda v: int(v * 0.7))
+    bg.paste(fg, ((tw - fg.width) // 2, (th - fg.height) // 2))
+    for old in out.parent.glob(f"{size}-{version}-v*.png"):
+        old.unlink()
+    bg.save(out, optimize=True)
+    return out
+
+
 def recent(limit: int = 30) -> list[dict]:
     """The covers made here, newest first, for the library."""
     root = settings.data_dir / "covers"
@@ -388,7 +466,7 @@ CODE_TAG = hashlib.sha256(b"".join((Path(__file__).parent / n).read_bytes() for 
 
 def _preview_key(c: dict, design_id: str) -> str:
     spec = {k: v for k, v in (c["spec"] or {}).items() if k != "design"}
-    return hashlib.sha256(json.dumps([CODE_TAG, design_id, spec, c.get("faces"), (c.get("look") or {}).get("product")],
+    return hashlib.sha256(json.dumps([CODE_TAG, design_id, spec, c.get("faces"), (c.get("look") or {}).get("product"), c.get("extras")],
                                      sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -405,6 +483,7 @@ def previews(cid: str) -> dict[str, str]:
     product = (c["look"] or {}).get("product")
     src = Image.open(folder(cid) / "frame.png").convert("RGB")
     names = {d: f"{d}-{_preview_key(c, d)}.png" for d in designs.DESIGNS}
+    extras = extra_images(c)
 
     def one(design_id: str) -> None:
         p = pdir / names[design_id]
@@ -412,7 +491,7 @@ def previews(cid: str) -> dict[str, str]:
             return
         spec = Spec.model_validate({**c["spec"], "design": design_id})
         img, _ = design.draw(spec, src, [tuple(f) for f in c["faces"]], mask, tuple(product) if product else None,
-                             kit.label_path(spec.rating))
+                             kit.label_path(spec.rating), extras=extras)
         img.resize((PREVIEW_W, PREVIEW_H), Image.LANCZOS).save(p, optimize=True)
 
     with ThreadPoolExecutor(4) as ex:  # OpenCV lets go of the GIL, so this is about 4x faster
@@ -448,7 +527,8 @@ def out(c: dict) -> dict:
         r["usd"] = round(r["usd"] + x["usd"], 6)
     return {k: c[k] for k in ("id", "status", "stage", "error", "context", "budget_usd", "look", "spec", "why", "checks", "created_at")} | {
         "recommended": c.get("recommended") or [], "headlines": c.get("headlines") or [], "headline": c.get("headline"),
-        "messages": c.get("messages") or [], "can_undo": bool(c.get("history")),
+        "messages": c.get("messages") or [], "can_undo": bool(c.get("history")), "extras": len(c.get("extras") or []),
+        "sizes": {k: f"{w}×{h}" for k, (w, h) in SIZES.items()},
         "costs": list(rows.values()), "used_usd": spent(c),
         "cut_available": c.get("cut_available", False), "frame": f"/api/covers/{c['id']}/frame.png",
         "images": {n: f"/api/covers/{c['id']}/{n}.png?v={c['version']}" for n in VERSIONS} if c["version"] else None,

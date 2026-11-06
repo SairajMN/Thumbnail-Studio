@@ -13,14 +13,16 @@ Then the cover is checked the way the profile grid shows it: the middle 3:4 (y 2
 Nothing is ever drawn over a head: not a word, the pill, the wash, the ring, the arrow, the label or the wave.
 """
 
+import io
 from functools import cache
 from pathlib import Path
 from typing import Literal
 
 import cv2
 import numpy as np
+import segno
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from studio import designs
 from studio.designs import Recipe
@@ -60,6 +62,9 @@ class Spec(BaseModel):
     punch_in: bool = True  # zoom in on the subject, and grade the colours
     arrow: bool = True  # ring and arrow on the product, when the analysis found one
     wave: bool | None = None  # None: the design's choice
+    offer: str | None = Field(None, max_length=24)  # a price or offer from the context ("20% OFF"), shown as a tag on the Offer design
+    qr_url: str | None = Field(None, pattern=r"^https?://\S{3,300}$")  # a link shown as a QR code card, on any design
+    qr_label: str = Field("SCAN ME", max_length=20)
 
     @model_validator(mode="before")
     @classmethod
@@ -82,6 +87,9 @@ class Spec(BaseModel):
 FONTS = {  # (file, style inside a .ttc) in order of preference; macOS first, then any machine's fallback
     "heavy": [("/System/Library/Fonts/Avenir Next.ttc", "Heavy"), ("/System/Library/Fonts/Supplemental/Arial Black.ttf", None)],
     "bold": [("/System/Library/Fonts/Avenir Next.ttc", "Bold"), ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", None)],
+    # for text with a character the faces above lack (₹ is missing from Avenir Next and Arial)
+    "heavy_fallback": [("/System/Library/Fonts/SFCompact.ttf", None), ("/System/Library/Fonts/HelveticaNeue.ttc", "Condensed Black")],
+    "bold_fallback": [("/System/Library/Fonts/HelveticaNeue.ttc", "Bold"), ("/System/Library/Fonts/Helvetica.ttc", "Bold")],
 }
 
 
@@ -106,15 +114,33 @@ def font(weight: str, px: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(f[0], px, index=f[1]) if f else ImageFont.load_default(size=px)
 
 
+@cache
+def _has(weight: str, ch: str) -> bool:
+    """Whether the weight's face draws `ch` (a missing character draws the same box as a private-use one)."""
+    def raster(c):
+        im = Image.new("L", (90, 90), 0)
+        ImageDraw.Draw(im).text((8, 8), c, font=font(weight, 48), fill=255)
+        return im.tobytes()
+    return raster(ch) != raster("\ue000")
+
+
+def font_for(weight: str, px: int, text: str) -> ImageFont.FreeTypeFont:
+    """The weight's face, or its fallback when the text has a character the face lacks."""
+    if all(_has(weight, ch) for ch in set(text)) or not _face_file(weight + "_fallback"):
+        return font(weight, px)
+    f = _face_file(weight + "_fallback")
+    return ImageFont.truetype(f[0], px, index=f[1])
+
+
 def _width(draw, text: str, f, tracking: float = 0) -> float:
     return draw.textlength(text, font=f) + tracking * max(0, len(text) - 1)
 
 
 def _fit(draw, text: str, weight: str, start: int, low: int, max_w: int, spaced: bool = False) -> tuple[ImageFont.FreeTypeFont, int]:
     px = start
-    while px > low and _width(draw, text, font(weight, px), 0.32 * px if spaced else 0) > max_w:
+    while px > low and _width(draw, text, font_for(weight, px, text), 0.32 * px if spaced else 0) > max_w:
         px -= 4
-    return font(weight, px), px
+    return font_for(weight, px, text), px
 
 
 def _line2(draw, text: str) -> tuple[list[str], ImageFont.FreeTypeFont, int]:
@@ -125,7 +151,7 @@ def _line2(draw, text: str) -> tuple[list[str], ImageFont.FreeTypeFont, int]:
     if px < 150 and len(words) > 1:
         cut = min(range(1, len(words)), key=lambda i: abs(len(" ".join(words[:i])) - len(" ".join(words[i:]))))
         two = [" ".join(words[:cut]), " ".join(words[cut:])]
-        f2, px2 = _fit(draw, max(two, key=lambda t: draw.textlength(t, font=font("heavy", 100))), "heavy", 210, 80, 900)
+        f2, px2 = _fit(draw, max(two, key=lambda t: draw.textlength(t, font=font_for("heavy", 100, t))), "heavy", 210, 80, 900)
         if px2 > px:
             return two, f2, px2
     return [text], f, px
@@ -253,8 +279,62 @@ def _card(src: Image.Image, bottom: int, heads_src: list[PxBox], focus: tuple[fl
     return rot, (x0, y0), heads
 
 
+def _tile(img: Image.Image, faces: list[Box], tw: int, th: int) -> tuple[Image.Image, list[PxBox]]:
+    """An image cropped to tw x th around its faces (never through a head), and its heads in the tile's pixels."""
+    src = img.convert("RGB")
+    pw, ph = src.size
+    heads = [head((round(x * pw), round(y * ph), round(w * pw), round(h * ph))) for x, y, w, h in faces]
+    sc = max(tw / pw, th / ph)
+    fx = sum(x + w / 2 for x, _, w, _ in heads) / len(heads) if heads else pw / 2
+    fy = sum(y + h / 2 for _, y, _, h in heads) / len(heads) if heads else ph / 2
+    x0 = min(max(0, fx * sc - tw / 2), pw * sc - tw)
+    y0 = min(max(0, fy * sc - th / 2), ph * sc - th)
+    if heads:
+        y0 = max(0, min(y0, min(y for _, y, _, _ in heads) * sc - 16))
+    tile = src.resize((round(pw * sc), round(ph * sc)), Image.LANCZOS).crop((round(x0), round(y0), round(x0) + tw, round(y0) + th))
+    out = []
+    for x, y, w, h in heads:
+        l, t = max(0, x * sc - x0), max(0, y * sc - y0)
+        r, b = min(tw, (x + w) * sc - x0), min(th, (y + h) * sc - y0)
+        if r > l and b > t:
+            out.append((round(l), round(t), round(r - l), round(b - t)))
+    return tile, out
+
+
+def collage(items: list[tuple[Image.Image, list[Box]]], bottom: int) -> tuple[Image.Image, list[PxBox]]:
+    """Up to 4 images in white-bordered tiles under the headline (2 side by side; 3 as two over one; 4 as 2 x 2), on a
+    transparent layer, with the heads in canvas pixels."""
+    items = items[:4]
+    rows = {1: [1], 2: [2], 3: [2, 1], 4: [2, 2]}[len(items)]
+    top, gap, pad = bottom + GAP, 24, 10
+    area_w, area_h = round(W * 0.88), SAFE[3] - 30 - (bottom + GAP)
+    tw = (area_w - gap) // 2 if max(rows) == 2 else area_w
+    th = min((area_h - gap * (len(rows) - 1)) // len(rows), round(tw * (1.6 if len(rows) == 1 else 1.0)))
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    heads: list[PxBox] = []
+    k = 0
+    for r, n in enumerate(rows):
+        y = top + r * (th + gap)
+        x = (W - (n * tw + (n - 1) * gap)) // 2
+        for _ in range(n):
+            img, faces = items[k]
+            tile, th_heads = _tile(img, faces, tw - 2 * pad, th - 2 * pad)
+            card = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+            ImageDraw.Draw(card).rounded_rectangle((0, 0, tw - 1, th - 1), radius=20, fill=(255, 255, 255, 255))
+            inner = Image.new("L", tile.size, 0)
+            ImageDraw.Draw(inner).rounded_rectangle((0, 0, tile.width - 1, tile.height - 1), radius=12, fill=255)
+            card.paste(tile, (pad, pad), inner)
+            shadow = card.getchannel("A").filter(ImageFilter.GaussianBlur(16)).point(lambda v: int(v * 0.35))
+            layer.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", card.size, (0, 0, 0)).split(), shadow)), (x + 6, y + 12))
+            layer.alpha_composite(card, (x, y))
+            heads += [(x + pad + hx, y + pad + hy, hw, hh) for hx, hy, hw, hh in th_heads]
+            x += tw + gap
+            k += 1
+    return layer, heads
+
+
 def picture(spec: Spec, pal: Pal, frame: Image.Image, bottom: int, faces: list[Box], mask: np.ndarray | None,
-            product: Box | None = None, cut: bool = True) -> dict:
+            product: Box | None = None, cut: bool = True, extras: list[tuple[Image.Image, list[Box]]] = ()) -> dict:
     """The picture layers (1 and 2) as a float RGB array, with the heads in canvas pixels, the transform used (None
     for a card) and the subject treatment drawn. `cut` False draws the design without its cut-out: the frame itself.
     The subject is cut out only when it is a person or the product the video is about: on key art or a busy scene
@@ -269,6 +349,8 @@ def picture(spec: Spec, pal: Pal, frame: Image.Image, bottom: int, faces: list[B
         if not (pb and overlap(pb, _xyxy(subject))):
             subject = None  # no person, and not the product: nothing to cut out or zoom in on
     mode = recipe.subject
+    if mode == "collage":
+        mode = "collage" if extras else "panel"  # a collage needs the images the user adds
     if mode == "pedestal" and heads_src:
         mode = "cutout"  # people don't stand on a podium
     if not cut and mode in CUT_MODES or mode in CUT_MODES and subject is None:
@@ -278,6 +360,13 @@ def picture(spec: Spec, pal: Pal, frame: Image.Image, bottom: int, faces: list[B
     frame_cover = _warp(np.asarray(src, np.float32), cover, (W - pw * cover) / 2, (H - ph * cover) / 2)
     back = designs.background(recipe, pal, frame_cover, spec.line2)
     graded = _graded(src) if spec.punch_in else src
+
+    if mode == "collage":
+        back = designs.decorate(back, recipe, pal, seed=7)
+        img = Image.fromarray(np.clip(back, 0, 255).astype(np.uint8)).convert("RGBA")
+        layer, heads = collage([(graded, list(faces)), *[((_graded(i) if spec.punch_in else i.convert("RGB")), f) for i, f in extras]], bottom)
+        img.alpha_composite(layer)
+        return {"base": np.asarray(img.convert("RGB"), np.float32), "heads": heads, "t": None, "mode": mode}
 
     if mode in ("card", "panel"):
         focus = ((subject[0] + subject[2] / 2) / pw, (subject[1] + subject[3] / 2) / ph) if subject else (0.5, 0.5)
@@ -292,7 +381,8 @@ def picture(spec: Spec, pal: Pal, frame: Image.Image, bottom: int, faces: list[B
     pedestal = mode == "pedestal"
     prod_src = product and (round(product[0] * pw), round(product[1] * ph), round(product[2] * pw), round(product[3] * ph))
     s, ox, oy = transform(pw, ph, bottom, heads_src, subject, spec.punch_in, prod_src or None,
-                          fill=0.62 if pedestal else 0.85, max_bottom=H * 0.78 if pedestal else None, edge_off=mode not in CUT_MODES)
+                          fill=0.62 if pedestal else 0.72 if recipe.badge else 0.85,  # room for the podium, or the price tag
+                          max_bottom=H * 0.78 if pedestal else None, edge_off=mode not in CUT_MODES)
     sharp = _warp(np.asarray(graded, np.float32), s, ox, oy)
     valid = _warp(np.ones((ph, pw), np.float32), s, ox, oy, cv2.INTER_LINEAR)
     sub_c = subject and (subject[0] * s + ox, subject[1] * s + oy, subject[2] * s, subject[3] * s)
@@ -403,6 +493,49 @@ def _draw_marks(d: ImageDraw.ImageDraw, marks: dict, colour: str) -> dict[str, t
     return boxes
 
 
+def place(size: tuple[int, int], spots: list[tuple[int, int]], taken: list[tuple[int, int, int, int]]) -> tuple[int, int] | None:
+    """The first spot where a badge of `size` touches nothing taken (heads, marks, words, other badges), or None."""
+    w, h = size
+    return next(((x, y) for x, y in spots if SAFE[0] <= x and x + w <= SAFE[2] and SAFE[1] <= y and y + h <= SAFE[3]
+                 and not any(overlap((x, y, x + w, y + h), t) for t in taken)), None)
+
+
+def corners(size: tuple[int, int], bottom: int) -> list[tuple[int, int]]:
+    """Places for a badge: the lower corners first, then up the sides, never above the headline."""
+    w, h = size
+    left, right = SAFE[0] + 10, SAFE[2] - 10 - w
+    ys = [y for y in (SAFE[3] - 80 - h, SAFE[3] - 420 - h, SAFE[3] - 760 - h) if y > bottom + 20]
+    return [(x, y) for y in ys for x in (left, right)]
+
+
+def price_tag(text: str, fill: str) -> Image.Image:
+    """The offer on a tilted price tag, with a hole like a shop tag."""
+    f, _ = _fit(ImageDraw.Draw(Image.new("RGB", (8, 8))), text.upper(), "heavy", 76, 36, 250)
+    d0 = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+    tw = round(d0.textlength(text.upper(), font=f))
+    w, h = tw + 110, 136
+    tag = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tag)
+    d.rounded_rectangle((0, 0, w - 1, h - 1), radius=26, fill=fill, outline=ink_on(fill), width=6)
+    d.ellipse((24, h / 2 - 14, 52, h / 2 + 14), fill=(0, 0, 0, 0), outline=ink_on(fill), width=5)  # the hole
+    d.text((70 + tw / 2, h / 2), text.upper(), font=f, fill=ink_on(fill), anchor="mm")
+    return tag.rotate(-8, resample=Image.BICUBIC, expand=True)
+
+
+def qr_card(url: str, label: str) -> Image.Image:
+    """A white card with the link's QR code and a label under it."""
+    buf = io.BytesIO()
+    segno.make(url, error="m").save(buf, kind="png", scale=6, border=2)
+    qr = Image.open(io.BytesIO(buf.getvalue())).convert("RGBA").resize((190, 190), Image.NEAREST)
+    card = Image.new("RGBA", (220, 262), (0, 0, 0, 0))
+    d = ImageDraw.Draw(card)
+    d.rounded_rectangle((0, 0, 219, 261), radius=18, fill=(255, 255, 255, 255))
+    card.alpha_composite(qr, (15, 15))
+    f, _ = _fit(d, label.upper(), "bold", 30, 16, 190)
+    d.text((110, 232), label.upper(), font=f, fill=INK, anchor="mm")
+    return card
+
+
 def _wave(d: ImageDraw.ImageDraw, colour: str) -> None:
     xs = np.linspace(0, W, 60)
     for base, amp, phase, c in ((1640, 26, 0.0, colour), (1676, 30, 1.3, BLUE)):
@@ -412,7 +545,7 @@ def _wave(d: ImageDraw.ImageDraw, colour: str) -> None:
 # --- the words ----------------------------------------------------------------------------------
 
 def _pill(d: ImageDraw.ImageDraw, y: int, left: str | None, right: str | None, fill: str, x_left: int | None = None) -> tuple[int, int, int, int]:
-    f = font("bold", 34)
+    f = font_for("bold", 34, f"{left or ''}{right or ''}")
     pad, h = 32, PILL_H
     parts = [t for t in (left, right) if t]
     widths = [round(d.textlength(t, font=f)) + 2 * pad for t in parts]
@@ -440,7 +573,7 @@ def _words(spec: Spec, pal: Pal) -> tuple[Image.Image, dict, dict]:
     stroke2 = INK if lum(pal.big) > 0.3 else WHITE  # the big line always gets a thick outline: the sticker look
     y, px1 = TOP, None
     if spec.name_tag:
-        f = font("bold", 34)
+        f = font_for("bold", 34, spec.name_tag.upper())
         tw = round(d.textlength(spec.name_tag.upper(), font=f))
         x0 = x_left if left else (W - tw) // 2 - 26
         boxes["name_tag"] = (x0, y, x0 + tw + 52, y + 54)
@@ -501,14 +634,15 @@ def palette_for(spec: Spec, frame: Image.Image) -> Pal:
 
 
 def draw(spec: Spec, frame: Image.Image, faces: list[Box] = (), mask: np.ndarray | None = None, product: Box | None = None,
-         rating_img: Path | None = None, cut: bool = True) -> tuple[Image.Image, dict]:
+         rating_img: Path | None = None, cut: bool = True, extras: list[tuple[Image.Image, list[Box]]] = ()) -> tuple[Image.Image, dict]:
     """The cover and its report: the box of every word and mark, the heads, the checks, and the subject treatment
     used. `faces` and `mask` come from the frame (studio.frame); `product` is the object the video is about, as the
-    look model found it. `cut` False draws the design with the frame itself instead of its cut-out."""
+    look model found it. `cut` False draws the design with the frame itself instead of its cut-out. `extras`: the
+    images (with their faces) the user added for a collage."""
     bottom = headline_bottom(spec)
     src = frame.convert("RGB")
     pal = palette_for(spec, src)
-    pic = picture(spec, pal, src, bottom, list(faces), mask, product, cut)
+    pic = picture(spec, pal, src, bottom, list(faces), mask, product, cut, list(extras))
     heads = pic["heads"]
     end = wash_end(bottom, heads)
     base = _wash(pic["base"], bottom, pal.wash, end)
@@ -527,20 +661,30 @@ def draw(spec: Spec, frame: Image.Image, faces: list[Box] = (), mask: np.ndarray
         boxes.update(_draw_marks(d, marks, pal.glow))
     canvas = canvas.convert("RGBA")
     canvas.alpha_composite(words)
+    taken = [_xyxy(hd) for hd in heads] + [b for k, b in boxes.items() if k not in ("arrow",)] \
+        + [(px - 24, py - 24, px + 24, py + 24) for px, py in marks.get("arrow", [])]  # the arrow's line, not its box
+    badges = []
+    if spec.offer and spec.recipe.badge:
+        badges.append(("offer", price_tag(spec.offer, pal.pill)))
+    if spec.qr_url:
+        badges.append(("qr", qr_card(spec.qr_url, spec.qr_label)))
     if rating_img and rating_img.exists():
-        badge = Image.open(rating_img).convert("RGBA")
-        badge = badge.resize((110, round(badge.height * 110 / badge.width)))
-        low, high = SAFE[3] - 80 - badge.height, SAFE[3] - 420 - badge.height
-        left, right = SAFE[0] + 10, SAFE[2] - 10 - badge.width
-        spots = [(left, low), (right, low), (left, high), (right, high)]  # lower corners first, then higher up
-        taken = [_xyxy(hd) for hd in heads] + ([boxes["ring"]] if "ring" in boxes else []) \
-            + [(px - 24, py - 24, px + 24, py + 24) for px, py in marks.get("arrow", [])]  # the arrow's line, not its box
-        bx, by = next((xy for xy in spots if not any(overlap((xy[0], xy[1], xy[0] + badge.width, xy[1] + badge.height), t)
-                                                     for t in taken)), spots[0])
-        canvas.alpha_composite(badge, (bx, by))
-        boxes["rating"] = (bx, by, bx + badge.width, by + badge.height)
+        b = Image.open(rating_img).convert("RGBA")
+        badges.append(("rating", b.resize((110, round(b.height * 110 / b.width)))))
+    left_out = []
+    for name, img in badges:  # each in the first free place, so badges never cover a face, a mark, the words or each other
+        w, h = img.size
+        # the price tag is the point of its design: any free place down either side, highest first; the others: corners
+        scan = [(x, y) for y in range(bottom + 20, SAFE[3] - h, 40) for x in (SAFE[2] - 10 - w, SAFE[0] + 10)] if name == "offer" else []
+        spot = place(img.size, scan or corners(img.size, bottom), taken)
+        if spot is None:
+            left_out.append(name)
+            continue
+        canvas.alpha_composite(img, spot)
+        boxes[name] = (spot[0], spot[1], spot[0] + img.width, spot[1] + img.height)
+        taken.append(boxes[name])
     rep = {"boxes": boxes, "heads": heads, "wash_end": end, "light": pal.light, "mode": pic["mode"], "cut": pic["mode"] in CUT_MODES,
-           "colour1": pal.small, **sizes}
+           "colour1": pal.small, "left_out": left_out, **sizes}
     rep["checks"] = checks(spec, rep, under, pal)
     return canvas.convert("RGB"), rep
 
@@ -584,4 +728,7 @@ def checks(spec: Spec, rep: dict, under: Image.Image, pal: Pal) -> list[dict]:
     long = [n for n, text, most in (("small line", spec.line1, 6), ("big line", spec.line2, 3)) if len(text.split()) > most]
     out.append({"id": "short", "ok": not long, "detail": "Headline reads at a glance." if not long
                 else f"Too many words in the {' and '.join(long)} (small line 6 at most, big line 3)."})
+    names = {"offer": "the price tag", "qr": "the QR code", "rating": "the age rating"}
+    if rep.get("left_out"):
+        out.append({"id": "badges", "ok": False, "detail": f"No free place without covering a face or the words for {', '.join(names[n] for n in rep['left_out'])}."})
     return out

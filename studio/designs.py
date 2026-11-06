@@ -1,4 +1,4 @@
-"""The designs: 16 recipes taken from the store's best covers (PLAN_CHAT_STUDIO.md, section 3), all drawn by code from
+"""The designs: 18 recipes taken from the store's best covers (PLAN_CHAT_STUDIO.md, section 3), all drawn by code from
 the user's frame. A recipe names a background, how the subject is shown, how the words sit, and the decorations;
 design.py does the drawing, the face protection and the checks for all of them alike.
 
@@ -8,7 +8,9 @@ Subject treatments:
 - silhouette: the subject cut out and filled near-black, in front of a sun or a light beam
 - card: the frame in a white-bordered card, tilted a little
 - frame: the frame itself, zoomed in on the subject
-A design whose subject can't be cut out (no person, no product) falls back to its card or the frame.
+- collage: the frame and up to 3 more images the user adds, in a grid
+A design whose subject can't be cut out (no person, no product) falls back to its card or the frame; a collage with
+no images added shows the frame as a panel.
 """
 
 from dataclasses import dataclass, field
@@ -29,7 +31,7 @@ class Recipe:
     source: str  # the reference covers it comes from
     blurb: str
     background: str  # studio | flood | gradient | spotlight | space | sunset | blur | frame | pattern
-    subject: str  # cutout | pedestal | silhouette | card | frame
+    subject: str  # cutout | pedestal | silhouette | card | frame | collage
     podium: str | None = None  # glossy | cube | rock | drape
     align: str = "center"  # center | left
     spaced: bool = False  # the small line letter-spaced, a title look
@@ -38,7 +40,8 @@ class Recipe:
     wave: bool = False
     colors: dict = field(default_factory=dict)  # the design's own colours, by role (palette.ROLES)
     sample: tuple[str, str] = ("SMALL LINE", "BIG LINE")  # the words a preview shows before any are written
-    fits: tuple[str, ...] = ()  # person | product | art | group | event: what frame it suits
+    fits: tuple[str, ...] = ()  # person | product | art | group | event | offer: what frame it suits
+    badge: bool = False  # the offer as a price tag, when the cover has one
 
 
 DESIGNS: dict[str, Recipe] = {r.id: r for r in [
@@ -90,6 +93,14 @@ DESIGNS: dict[str, Recipe] = {r.id: r for r in [
     Recipe("hand_product", "Hand + Product", "WD SN850 'Play More, Store More'",
            "The product in hand, cut out over a pattern of its name", "pattern", "cutout",
            wave=True, colors={"big": BLUE, "small": NAVY, "highlight": BLUE}, sample=("PLAY MORE,", "STORE MORE"), fits=("product",)),
+    Recipe("collage", "Collage", "Pre-Order Now: First Light, Kingdom Come, LEGO Batman, Tokon",
+           "Your frame and up to 3 more images in a grid on a light poster", "flood", "collage",
+           decor=("shapes",), wave=True, colors={"bg": "#F4F1EA", "big": YELLOW, "small": INK, "pill": YELLOW},
+           sample=("PRE-ORDER", "NOW"), fits=("event", "product")),
+    Recipe("offer", "Offer", "PS Wallet Top-ups, Days of Play sale",
+           "The product cut out on blue with a white swoosh and the offer on a price tag", "gradient", "cutout",
+           decor=("swoosh",), badge=True, colors={"bg": "#1D2BD8", "big": WHITE, "small": "#BFD4FF", "pill": YELLOW, "glow": "#36E2C8"},
+           sample=("THIS WEEK ONLY", "DAYS OF PLAY"), fits=("offer", "product")),
 ]}
 
 # the writer's template -> the design a new cover starts on
@@ -131,11 +142,12 @@ def background(recipe: Recipe, pal: Pal, frame_cover: np.ndarray, words: str) ->
     if kind == "studio" or kind == "pattern":
         a = _vgrad("#FFFFFF", "#E3E8F1") * (1 - 0.25 * _radial(W / 2, H * 0.45, 900)) + 255 * 0.25 * _radial(W / 2, H * 0.45, 900)
         if kind == "pattern" and words:  # the name, faint, row after row (on its own layer: drawing translucent text
-            from studio.design import font  # straight onto the picture would not blend)
+            from studio.design import font_for  # straight onto the picture would not blend)
             img = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).convert("RGBA")
             layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             d = ImageDraw.Draw(layer)
-            f, txt = font("heavy", 120), (words.upper() + "   ") * 5
+            txt = (words.upper() + "   ") * 5
+            f = font_for("heavy", 120, txt)
             for i, y in enumerate(range(150, H, 165)):
                 d.text((-80 - (i % 2) * 260, y), txt, font=f, fill=rgb(pal.big) + (26,))
             img.alpha_composite(layer)

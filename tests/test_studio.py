@@ -216,9 +216,9 @@ def test_every_design_draws_both_versions_without_covering_a_face(design_id):
                 assert not rep["cut"]
 
 
-def test_sixteen_designs_each_with_its_reference():
-    assert len(designs.DESIGNS) == 16
-    assert all(r.source and r.blurb and r.subject in ("cutout", "pedestal", "silhouette", "card", "frame") for r in designs.DESIGNS.values())
+def test_eighteen_designs_each_with_its_reference():
+    assert len(designs.DESIGNS) == 18
+    assert all(r.source and r.blurb and r.subject in ("cutout", "pedestal", "silhouette", "card", "frame", "collage") for r in designs.DESIGNS.values())
     assert set(designs.FROM_TEMPLATE.values()) <= set(designs.DESIGNS)
 
 
@@ -237,7 +237,7 @@ def test_colours_by_role_user_first_then_design_then_house():
 def test_designs_presets_and_previews_from_the_api(fake):
     c = TestClient(app)
     ds = c.get("/api/designs").json()
-    assert len(ds) == 16 and {"id", "name", "from", "blurb"} <= set(ds[0])
+    assert len(ds) == 18 and {"id", "name", "from", "blurb"} <= set(ds[0])
     pal = c.get("/api/palettes").json()
     assert set(pal["roles"]) == set(palette.ROLES) and any(p["id"] == "wolverine" for p in pal["presets"])
     cov = _make(c)
@@ -401,3 +401,77 @@ def test_the_library_lists_covers_newest_first(fake):
     assert ids.index(second["id"]) < ids.index(first["id"])
     item = next(x for x in c.get("/api/covers").json() if x["id"] == second["id"])
     assert item["status"] == "done" and item["title"] and "/cut.png" in item["thumb"]
+
+
+# --- phase 4: collage, offer, QR, sizes --------------------------------------------------------------
+
+def test_a_collage_shows_the_added_images_and_keeps_their_faces_clear(fake):
+    c = TestClient(app)
+    cov = _make(c)
+    cid = cov["id"]
+    files = [("files", (f"x{i}.png", _png(_frame(colour=(20 * i, 80, 160))), "image/png")) for i in range(2)]
+    e = c.post(f"/api/covers/{cid}/images", files=files).json()
+    assert e["extras"] == 2
+    e = c.patch(f"/api/covers/{cid}", json={"design": "collage"}).json()
+    assert all(k["ok"] for k in e["checks"]["cut"]), e["checks"]["cut"]
+    too_many = [("files", (f"y{i}.png", _png(_frame()), "image/png")) for i in range(2)]
+    assert c.post(f"/api/covers/{cid}/images", files=too_many).status_code == 422  # 2 + 2 is over 3
+    assert c.post(f"/api/covers/{cid}/images", files=[("files", ("z.txt", b"nope", "text/plain"))]).status_code == 422
+    assert c.delete(f"/api/covers/{cid}/images").json()["extras"] == 0
+
+
+def test_collage_tiles_never_crop_through_a_head():
+    face = [(0.4, 0.05, 0.2, 0.1)]  # a face right at the top of an image
+    img, rep = design.draw(SPEC.model_copy(update={"design": "collage"}), _frame(), face, _mask(),
+                           extras=[(_frame(), face), (_frame(), []), (_frame(), face)])
+    assert rep["mode"] == "collage" and len(rep["heads"]) == 3
+    words_bottom = max(b[3] for k, b in rep["boxes"].items() if k.startswith(("line", "pill")))
+    assert all(t > words_bottom for _, t, _, _ in rep["heads"])
+    assert next(k for k in rep["checks"] if k["id"] == "face_clear")["ok"]
+
+
+def test_an_offer_in_the_video_puts_the_offer_design_first_and_shows_its_tag(fake, monkeypatch):
+    monkeypatch.setitem(HEADLINES["options"][0], "offer", "20% OFF")
+    c = TestClient(app)
+    cov = _make(c)
+    assert cov["recommended"][0] == "offer" and cov["spec"]["design"] == "offer" and cov["spec"]["offer"] == "20% OFF"
+    img, rep = design.draw(design.Spec.model_validate(cov["spec"]), _frame(), [(0.38, 0.27, 0.24, 0.12)], _mask(), (0.4, 0.62, 0.2, 0.1))
+    assert "offer" in rep["boxes"] and all(k["ok"] for k in rep["checks"]), rep["checks"]
+
+
+def test_offer_and_qr_by_chat_for_free(fake):
+    c = TestClient(app)
+    cov = _make(c)
+    cid, calls = cov["id"], len(fake["calls"])
+    e = _say(c, cid, "price ₹4,999")
+    assert (e["spec"]["offer"], e["spec"]["design"]) == ("₹4,999", "offer")
+    e = _say(c, cid, "remove the offer")
+    assert e["spec"]["offer"] is None
+    e = _say(c, cid, "use the offer design")
+    assert e["spec"]["design"] == "offer" and e["spec"]["offer"] is None
+    e = _say(c, cid, "add a qr https://example.com/register.")
+    assert e["spec"]["qr_url"] == "https://example.com/register"
+    assert all(k["ok"] for k in e["checks"]["cut"]), e["checks"]["cut"]
+    e = _say(c, cid, "qr code please")
+    assert "link" in e["messages"][-1]["text"] and e["spec"]["qr_url"] == "https://example.com/register"
+    e = _say(c, cid, "remove the qr")
+    assert e["spec"]["qr_url"] is None
+    assert len(fake["calls"]) == calls
+    assert c.patch(f"/api/covers/{cid}", json={"qr_url": "javascript:alert(1)"}).status_code == 422
+
+
+def test_other_sizes_keep_every_word(fake):
+    c = TestClient(app)
+    cov = _make(c)
+    for size, dims in {"reel": (1080, 1920), "feed": (1080, 1350), "square": (1080, 1080), "youtube": (1280, 720)}.items():
+        r = c.get(f"/api/covers/{cov['id']}/export/{size}.png?version=plain&download=1")
+        assert r.status_code == 200 and Image.open(io.BytesIO(r.content)).size == dims
+        assert f"-plain-{size}.png" in r.headers["content-disposition"]
+    assert c.get(f"/api/covers/{cov['id']}/export/poster.png").status_code == 404
+
+
+def test_text_with_a_rupee_sign_falls_back_to_a_face_that_has_it():
+    if not design._face_file("heavy_fallback"):
+        pytest.skip("no fallback face on this machine")
+    assert design.font_for("heavy", 60, "₹4,999").path != design.font("heavy", 60).path or not design._has("heavy", "₹")
+    assert design.font_for("heavy", 60, "NOW").path == design.font("heavy", 60).path

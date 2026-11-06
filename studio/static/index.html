@@ -82,6 +82,11 @@
   .lib a { color: var(--text); text-decoration: none; font-size: 12px; }
   .lib img { width: 100%; aspect-ratio: 9/16; object-fit: cover; border-radius: 8px; display: block; background: var(--line); }
   details summary { cursor: pointer; color: var(--muted); margin-bottom: 6px; }
+  .sizes { display: flex; gap: 8px; align-items: center; }
+  select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font: inherit; }
+  .gridview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+  .gridview img { width: 100%; aspect-ratio: 3/4; object-fit: cover; display: block; }
+  .gridview img.mine { outline: 3px solid var(--accent); outline-offset: -3px; }
 </style>
 </head>
 <body>
@@ -98,8 +103,13 @@
   <aside class="live">
     <div class="tabs"><button id="t_cut" class="ghost on">With cut-out</button><button id="t_plain" class="ghost">Without cut-out</button></div>
     <div id="shot" class="shot"><div class="empty">Your cover shows up here, and changes as you answer.</div></div>
-    <div class="small" style="display:flex;justify-content:space-between;align-items:center">
-      <label><input id="grid" type="checkbox"> Profile grid crop (3:4)</label><a id="dl" class="dl" hidden>Download</a></div>
+    <div class="small sizes"><label for="size">Size</label><select id="size">
+        <option value="reel">Reel cover 9:16</option><option value="feed">Feed post 4:5</option>
+        <option value="square">Square 1:1</option><option value="youtube">YouTube 16:9</option></select>
+      <span style="flex:1"></span><a id="dl" class="dl" hidden>Download</a></div>
+    <div id="sizeNote" class="small muted" hidden>Other sizes put the cover's words and picture on a blurred copy of it, so nothing is cut.</div>
+    <div class="small" style="display:flex;gap:14px"><label><input id="grid" type="checkbox"> Profile grid crop (3:4)</label>
+      <label><input id="withMine" type="checkbox"> With my covers</label></div>
     <div id="budget" class="small"></div>
     <details id="details" class="small"><summary>Checks and costs</summary>
       <div id="checks"></div>
@@ -123,7 +133,7 @@ const TOPICS = {
 const ORDER = ["frame", "context", "working", "design", "colours", "headline", "ready"];
 
 // state: the cover from the server, plus the chat's own progress (kept per cover in this browser)
-let S = { step: "frame", frameUrl: null, file: null, context: null, cover: null, previews: null, designs: [], palettes: null,
+let S = { size: "reel", withMine: false, mine: null, step: "frame", frameUrl: null, file: null, context: null, cover: null, previews: null, designs: [], palettes: null,
           colourLabel: null, view: "cut", editing: null, warnedFor: null };
 let timer = null;
 
@@ -180,6 +190,9 @@ function render() {
       if (past("headline")) out.push(me(`${esc(c.spec.line1)} <b>${esc(c.spec.line2)}</b>`, "headline"));
       if (S.step === "ready") {
         out.push(bot(readyMessage()));
+        if (c.spec.design === "collage" && !c.extras) out.push(bot(`A collage shows your frame and up to 3 more images. Add them here:
+          <label class="drop" id="dropMore">Click to add 1–3 images<input id="moreFiles" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden></label>`));
+        if (c.spec.design === "offer" && !c.spec.offer) out.push(bot("Tell me the offer for the price tag, like <b>offer 20% off</b> or <b>price ₹4,999</b>."));
         for (const m of c.messages || []) out.push(m.role === "user" ? me(esc(m.text))
           : bot(esc(m.text) + `<span class="via">${m.by === "code" ? "done by code, free" : `by ${esc(modelName(m.by))}, ${usd(m.usd || 0)}`}</span>`));
         if (S.thinking) out.push(bot(`<span class="spin"></span>On it…`));
@@ -211,6 +224,9 @@ function quick() {  // the free one-tap edits, shown once the cover is ready
     + (c.look?.product ? b(sp.arrow ? "remove the arrow" : "add the arrow", sp.arrow ? "Remove arrow" : "Add arrow") : "")
     + b(sp.punch_in ? "zoom out" : "zoom in", sp.punch_in ? "Zoom out" : "Zoom in")
     + (pill ? b("remove the pill", "Remove pill") : "")
+    + (sp.design === "collage" ? `<button class="chip" data-add-images="1">${c.extras ? "Add images" : "Add images for the collage"}</button>` : "")
+    + (sp.design === "collage" && c.extras ? `<button class="chip" data-clear-images="1">Clear images</button>` : "")
+    + (sp.qr_url ? b("remove the qr", "Remove QR") : `<button class="chip" data-ask-qr="1">Add QR code</button>`)
     + (c.can_undo ? b("undo", "Undo") : "");
 }
 
@@ -278,9 +294,13 @@ function live() {
       : `<div class="empty">Your cover shows up here, and changes as you answer.</div>`;
     $("dl").hidden = true;
   } else {
-    $("shot").innerHTML = `<img src="${c.images[S.view]}" alt="Your cover">${S.busy ? `<div class="busy"><span class="spin"></span></div>` : ""}`;
+    const src = S.size === "reel" ? c.images[S.view] : `/api/covers/${c.id}/export/${S.size}.png?version=${S.view}&v=${encodeURIComponent(c.images[S.view].split("v=")[1] || "")}`;
+    $("shot").innerHTML = S.withMine
+      ? `<div class="gridview"><img class="mine" src="${c.images[S.view]}" alt="This cover">${(S.mine || []).filter((x) => x.id !== c.id && x.status === "done").slice(0, 8).map((x) => `<img src="${x.thumb}" alt="">`).join("")}</div>`
+      : `<img src="${src}" alt="Your cover">${S.busy ? `<div class="busy"><span class="spin"></span></div>` : ""}`;
     $("dl").hidden = false;
-    $("dl").href = c.images[S.view] + "&download=1";
+    $("dl").href = src + (src.includes("?") ? "&" : "?") + "download=1";
+    $("sizeNote").hidden = S.size === "reel";
   }
   if (!c) { $("checks").innerHTML = $("budget").innerHTML = $("costs").innerHTML = ""; return; }
   const checks = (c.checks || {})[S.view] || [];
@@ -359,10 +379,11 @@ function pickFile(f) {
 }
 
 $("log").addEventListener("click", (e) => {
-  const t = e.target.closest("[data-forget],[data-topic],[data-skip],[data-design],[data-colours],[data-custom],[data-custom-done],[data-save-palette],[data-headline],[data-own],[data-goto],[data-restart],[data-keep],[data-keep-words],[data-close-library],#drop");
+  const t = e.target.closest("#dropMore,[data-forget],[data-topic],[data-skip],[data-design],[data-colours],[data-custom],[data-custom-done],[data-save-palette],[data-headline],[data-own],[data-goto],[data-restart],[data-keep],[data-keep-words],[data-close-library],#drop");
   if (!t) return;
   if (t.id === "drop") return $("file").click();
   const d = t.dataset;
+  if (t.id === "dropMore") return $("moreFiles").click();
   if (d.forget) { e.stopPropagation(); return forgetPalette(d.forget); }
   if (d.savePalette) return savePalette();
   if (d.closeLibrary) { S.library = null; return render(); }
@@ -381,12 +402,38 @@ $("log").addEventListener("click", (e) => {
 });
 $("log").addEventListener("change", (e) => {
   if (e.target.id === "file") pickFile(e.target.files[0]);
+  if (e.target.id === "moreFiles") addImages(e.target.files);
   if (e.target.dataset.role) patch({ colors: { [e.target.dataset.role]: e.target.value } }).then((c) => { S.cover = c; live(); });
 });
 $("log").addEventListener("dragover", (e) => { if (S.step === "frame") { e.preventDefault(); $("drop")?.classList.add("over"); } });
 $("log").addEventListener("drop", (e) => { if (S.step === "frame") { e.preventDefault(); pickFile(e.dataTransfer.files[0]); } });
 
-$("quick").addEventListener("click", (e) => { const t = e.target.closest("[data-say]"); if (t) say(t.dataset.say); });
+$("quick").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-say],[data-add-images],[data-clear-images],[data-ask-qr]");
+  if (!t) return;
+  if (t.dataset.say) say(t.dataset.say);
+  if (t.dataset.addImages) { const i = document.createElement("input"); i.type = "file"; i.multiple = true; i.accept = "image/png,image/jpeg,image/webp"; i.onchange = () => addImages(i.files); i.click(); }
+  if (t.dataset.clearImages) api(`/api/covers/${S.cover.id}/images`, { method: "DELETE" }).then((c) => { S.cover = c; render(); });
+  if (t.dataset.askQr) { const url = prompt("The link for the QR code (https://…)"); if (url) say("qr " + url.trim()); }
+});
+
+async function addImages(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of [...files].slice(0, 3)) fd.append("files", f);
+  S.busy = true; live();
+  try { S.cover = await api(`/api/covers/${S.cover.id}/images`, { method: "POST", body: fd }); }
+  catch (err) { S.cover = { ...S.cover, messages: [...(S.cover.messages || []), { role: "bot", text: err.message, by: "code" }] }; }
+  S.busy = false;
+  render();
+}
+
+$("size").addEventListener("change", (e) => { S.size = e.target.value; live(); });
+$("withMine").addEventListener("change", async (e) => {
+  S.withMine = e.target.checked;
+  if (S.withMine && !S.mine) { try { S.mine = await api("/api/covers"); } catch (err) { S.mine = []; } }
+  live();
+});
 
 async function say(message) {  // a typed or one-tap edit, answered in the chat
   if (S.thinking) return;

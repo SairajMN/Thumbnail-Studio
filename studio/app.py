@@ -27,6 +27,9 @@ class EditIn(BaseModel):
     punch_in: bool | None = None
     arrow: bool | None = None
     wave: bool | None = None
+    offer: str | None = None
+    qr_url: str | None = None
+    qr_label: str | None = None
 
 
 def _err(e: covers.CoverError) -> HTTPException:
@@ -98,6 +101,35 @@ def chat_message(cover_id: str, body: ChatIn) -> dict:
         raise _err(e) from e
 
 
+@app.post("/api/covers/{cover_id}/images")
+async def add_cover_images(cover_id: str, files: list[UploadFile] = File(...)) -> dict:
+    """Images for a collage: up to 3 besides the frame."""
+    data = [await f.read(covers.MAX_FRAME_MB * (1 << 20) + 1) for f in files]
+    try:
+        return covers.out(covers.add_images(cover_id, data))
+    except covers.CoverError as e:
+        raise _err(e) from e
+
+
+@app.delete("/api/covers/{cover_id}/images")
+def clear_cover_images(cover_id: str) -> dict:
+    try:
+        return covers.out(covers.clear_images(cover_id))
+    except covers.CoverError as e:
+        raise _err(e) from e
+
+
+@app.get("/api/covers/{cover_id}/export/{size}.png")
+def export_cover(cover_id: str, size: str, version: str = "cut", download: bool = False) -> FileResponse:
+    """The cover at another size: reel 1080x1920, feed 1080x1350, square 1080x1080, youtube 1280x720."""
+    try:
+        p = covers.export(cover_id, size, version)
+    except covers.CoverError as e:
+        raise _err(e) from e
+    return FileResponse(p, media_type="image/png", filename=f"cover-{cover_id[:8]}-{version}-{size}.png",
+                        content_disposition_type="attachment" if download else "inline")
+
+
 @app.post("/api/covers/{cover_id}/undo")
 def undo_cover(cover_id: str) -> dict:
     try:
@@ -152,7 +184,7 @@ def get_cover(cover_id: str) -> dict:
 def edit_cover(cover_id: str, body: EditIn) -> dict:
     """Change the words, colours or effects; both versions are drawn again at once, at no cost. An empty string
     removes the highlight, pill or name tag."""
-    changes = {k: (v or None) if isinstance(v, str) and k not in ("line1", "line2", "design", "colors") else v
+    changes = {k: (v or None) if isinstance(v, str) and k not in ("line1", "line2", "design", "colors", "qr_label") else v
                for k, v in body.model_dump(exclude_none=True).items()}
     try:
         return covers.out(covers.edit(cover_id, changes))

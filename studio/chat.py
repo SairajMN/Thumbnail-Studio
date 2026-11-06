@@ -1,6 +1,7 @@
 """Edits typed in the chat once a cover is made. Simple ones are understood by code, for free: colours ("make the
 headline red"), the arrow, the pill, zoom, a design by name, "another design", "other colours", "undo". The quick
-buttons on the page send these same words. Anything else goes to GLM 5.3 Flash (GLM 5.3 if it fails), which turns the
+buttons on the page send these same words, as do "offer 20% off" and "qr https://..." for the price tag and the QR
+code. Anything else goes to GLM 5.3 Flash (GLM 5.3 if it fails), which turns the
 message into changes to the cover; its cost counts against the cover's budget, and when the budget can't cover it
 the reply says so and points at the free buttons.
 
@@ -46,6 +47,7 @@ class Plan(BaseModel):
     design: str | None = Field(description="a design id from the list, or null to keep it")
     colors: dict[str, str] | None = Field(description="colour roles to change, role -> #RRGGBB (roles: bg, big, small, highlight, pill, glow)")
     arrow: bool | None = Field(description="true or false to show or hide the ring and arrow, null to keep")
+    offer: str | None = Field(None, description="a new offer for the price tag, short ('20% OFF'), only one the user gives or the context states; empty string removes it; null keeps it")
     punch_in: bool | None = Field(description="true or false to zoom in on the subject or not, null to keep")
 
 
@@ -99,6 +101,22 @@ def understand(c: dict, message: str) -> tuple[dict | None, str] | None:
         name = _next(order, spec.get("colors_from"))
         label = {"game": "the game's colours", "design": "the design's own colours"}.get(name) or palette.PRESETS[name]["label"]
         return {"colors": name}, f"Now in {label}."
+    raw = message.strip()
+    url = re.search(r"https?://\S+", raw)
+    if re.search(r"\bqr\b", t):
+        if re.search(r"\b(remove|hide|no|without|delete|drop)\b", t):
+            return {"qr_url": None}, "QR code removed."
+        if url:
+            return {"qr_url": url.group(0).rstrip(".,)")}, "Added a QR code for that link."
+        return {}, "Send the link with it, like: qr https://example.com/register"
+    if re.search(r"\b(offer|price|deal|discount)\b", t):
+        if re.search(r"\b(remove|hide|no|without|delete|drop)\b", t):
+            return {"offer": None}, "Offer tag removed."
+        m = re.search(r"\b(?:offer|price|deal|discount)\b\s*(?:is|:|=|of)?\s*(.+)$", raw, re.I)
+        if m and m.group(1).strip() and m.group(1).strip().lower() not in ("design", "the design"):
+            offer = m.group(1).strip().strip("'\"")[:24]
+            go = {"offer": offer} | ({} if c["spec"]["design"] == "offer" else {"design": "offer"})
+            return go, f"The offer is now “{offer}”, on a price tag" + ("." if c["spec"]["design"] == "offer" else " in the Offer design.")
     for r in designs.DESIGNS.values():
         if re.search(rf"\b{re.escape(r.name.lower())}\b", t) or r.id.replace("_", " ") in t:
             return {"design": r.id}, f"Switched to {r.name}."
@@ -142,7 +160,7 @@ def say(cid: str, message: str) -> dict:
                                    f"<cover>\n{json.dumps(ctx, ensure_ascii=False)}\n</cover>\n<message>\n{message}\n</message>", Plan, EDIT_MAX)
             cost = round(sum(x["usd"] for x in covers.load(cid)["calls"][calls_before:]), 6)
             changes = {k: v for k, v in plan.model_dump(exclude={"reply"}).items() if v is not None}
-            for k in ("pill_left", "pill_right"):
+            for k in ("pill_left", "pill_right", "offer"):
                 if changes.get(k) == "":
                     changes[k] = None
             if changes.get("design") and changes["design"] not in designs.DESIGNS:
