@@ -7,7 +7,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from studio import covers, designs, palette
+from studio import chat, covers, designs, palette
 
 app = FastAPI(title="Thumbnail Studio", version="0.1.0")
 PAGE = Path(__file__).with_name("static") / "index.html"
@@ -52,9 +52,58 @@ def list_designs() -> list[dict]:
 
 @app.get("/api/palettes")
 def list_palettes() -> dict:
-    """Colour presets and the roles a user can set one by one. "game" (the look model's colours) and "design" (each
-    design's own) are offered per cover besides these."""
-    return {"roles": palette.ROLE_LABELS, "presets": [{"id": k, **v} for k, v in palette.PRESETS.items()]}
+    """Colour presets, the user's saved palettes ("mine"), and the roles a user can set one by one. "game" (the look
+    model's colours) and "design" (each design's own) are offered per cover besides these."""
+    return {"roles": palette.ROLE_LABELS, "presets": [{"id": k, **v} for k, v in palette.PRESETS.items()], "mine": palette.saved()}
+
+
+class PaletteIn(BaseModel):
+    name: str
+    colors: palette.Colors
+
+
+@app.post("/api/palettes", status_code=201)
+def save_palette(body: PaletteIn) -> dict:
+    """Save a colour set under a name; a name saved again replaces the old set."""
+    try:
+        return palette.save(body.name, body.colors)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@app.delete("/api/palettes/{palette_id}")
+def forget_palette(palette_id: str) -> dict:
+    if not palette.forget(palette_id):
+        raise HTTPException(404, "no such palette")
+    return {"ok": True}
+
+
+@app.get("/api/covers")
+def list_covers() -> list[dict]:
+    """The covers made here, newest first."""
+    return covers.recent()
+
+
+class ChatIn(BaseModel):
+    message: str
+
+
+@app.post("/api/covers/{cover_id}/chat")
+def chat_message(cover_id: str, body: ChatIn) -> dict:
+    """A typed edit: simple ones are done by code for free, the rest by GLM within the cover's budget. The message
+    and the reply are added to the cover's conversation."""
+    try:
+        return covers.out(chat.say(cover_id, body.message))
+    except covers.CoverError as e:
+        raise _err(e) from e
+
+
+@app.post("/api/covers/{cover_id}/undo")
+def undo_cover(cover_id: str) -> dict:
+    try:
+        return covers.out(covers.undo(cover_id))
+    except covers.CoverError as e:
+        raise _err(e) from e
 
 
 @app.get("/api/covers/{cover_id}/previews")

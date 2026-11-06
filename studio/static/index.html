@@ -73,13 +73,23 @@
   .sw { display: inline-block; width: 13px; height: 13px; border-radius: 3px; border: 1px solid var(--line); vertical-align: -2px; margin: 0 3px 0 6px; }
   a.dl { color: var(--accent); }
   .empty { color: var(--muted); text-align: center; padding: 40px 10px; border: 1px dashed var(--line); border-radius: 12px; }
+  .quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px 0; border-top: 1px solid var(--line); }
+  .quick[hidden] { display: none; }
+  .quick .chip { padding: 4px 10px; font-size: 13px; }
+  .via { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .chip .x { margin-left: 6px; color: var(--muted); }
+  .lib { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; margin-top: 10px; }
+  .lib a { color: var(--text); text-decoration: none; font-size: 12px; }
+  .lib img { width: 100%; aspect-ratio: 9/16; object-fit: cover; border-radius: 8px; display: block; background: var(--line); }
+  details summary { cursor: pointer; color: var(--muted); margin-bottom: 6px; }
 </style>
 </head>
 <body>
 <div class="app">
   <section class="chat">
-    <header><b>Thumbnail Studio</b><button id="restart" class="ghost">New cover</button></header>
+    <header><b>Thumbnail Studio</b><span><button id="library" class="ghost">My covers</button> <button id="restart" class="ghost">New cover</button></span></header>
     <div id="log" class="log" aria-live="polite"></div>
+    <div id="quick" class="quick" hidden></div>
     <form id="composer" class="composer" hidden>
       <textarea id="text" rows="2"></textarea>
       <button class="send" type="submit">Send</button>
@@ -90,9 +100,11 @@
     <div id="shot" class="shot"><div class="empty">Your cover shows up here, and changes as you answer.</div></div>
     <div class="small" style="display:flex;justify-content:space-between;align-items:center">
       <label><input id="grid" type="checkbox"> Profile grid crop (3:4)</label><a id="dl" class="dl" hidden>Download</a></div>
-    <div id="checks" class="small"></div>
     <div id="budget" class="small"></div>
-    <div id="costs" class="small"></div>
+    <details id="details" class="small"><summary>Checks and costs</summary>
+      <div id="checks"></div>
+      <div id="costs" style="margin-top:8px"></div>
+    </details>
   </aside>
 </div>
 <script>
@@ -166,16 +178,47 @@ function render() {
       if (past("colours")) out.push(bot((c.headlines.length ? `Pick a headline. I wrote ${c.headlines.length}, each on a different hook.` : "Keep this headline, or write your own.")
         + (S.step === "headline" ? headlineCards() : "")));
       if (past("headline")) out.push(me(`${esc(c.spec.line1)} <b>${esc(c.spec.line2)}</b>`, "headline"));
-      if (S.step === "ready") out.push(bot(readyMessage()));
+      if (S.step === "ready") {
+        out.push(bot(readyMessage()));
+        for (const m of c.messages || []) out.push(m.role === "user" ? me(esc(m.text))
+          : bot(esc(m.text) + `<span class="via">${m.by === "code" ? "done by code, free" : `by ${esc(modelName(m.by))}, ${usd(m.usd || 0)}`}</span>`));
+        if (S.thinking) out.push(bot(`<span class="spin"></span>On it…`));
+      }
     }
   }
+  if (S.library) out.push(libraryMessage());
   $("log").innerHTML = out.join("");
   $("log").scrollTop = $("log").scrollHeight;
-  const typing = S.step === "context" || S.editing === "headline";
+  const typing = S.step === "context" || S.editing === "headline" || S.step === "ready";
   $("composer").hidden = !typing;
-  $("text").placeholder = S.editing === "headline" ? "Small line / BIG LINE  (e.g. You won't believe / This SSD)" : "Caption, transcript, game, event, offer…";
+  $("text").placeholder = S.editing === "headline" ? "Small line / BIG LINE  (e.g. You won't believe / This SSD)"
+    : S.step === "ready" ? "Tell me what to change, e.g. make the headline red, or say it shorter" : "Caption, transcript, game, event, offer…";
+  quick();
   live();
   remember();
+}
+
+const MODEL_NAMES = { "glm-5.3-flash": "GLM 5.3 Flash", "glm-5.3": "GLM 5.3" };
+function modelName(id) { return MODEL_NAMES[id] || id; }
+
+function quick() {  // the free one-tap edits, shown once the cover is ready
+  const c = S.cover, ready = S.step === "ready" && c && c.spec;
+  $("quick").hidden = !ready;
+  if (!ready) return;
+  const sp = c.spec, pill = sp.pill_left || sp.pill_right;
+  const b = (say, label) => `<button class="chip" data-say="${say}">${label}</button>`;
+  $("quick").innerHTML = b("another design", "Another design") + b("other colours", "Other colours")
+    + (c.look?.product ? b(sp.arrow ? "remove the arrow" : "add the arrow", sp.arrow ? "Remove arrow" : "Add arrow") : "")
+    + b(sp.punch_in ? "zoom out" : "zoom in", sp.punch_in ? "Zoom out" : "Zoom in")
+    + (pill ? b("remove the pill", "Remove pill") : "")
+    + (c.can_undo ? b("undo", "Undo") : "");
+}
+
+function libraryMessage() {
+  const items = S.library || [];
+  return bot(`Your covers, newest first.${items.length ? "" : " None yet."}<div class="lib">`
+    + items.map((x) => `<a href="?id=${x.id}" title="${esc(x.title)}"><img src="${x.thumb}" alt="" loading="lazy">${esc(x.title).slice(0, 40)}</a>`).join("")
+    + `</div><div class="chips"><button class="chip" data-close-library="1">Close</button></div>`);
 }
 
 function designName(id) { return (S.designs.find((d) => d.id === id) || { name: id }).name; }
@@ -197,8 +240,9 @@ function colourChips() {
   const game = lk.bg || lk.accent ? `<button class="chip" data-colours="game" data-label="Game colours">${dots({ bg: lk.bg, big: lk.accent })}Game colours</button>` : "";
   const custom = S.editing === "colours" ? `<div class="roles">${Object.entries(p.roles).map(([k, label]) =>
     `<label><input type="color" data-role="${k}" value="${(S.cover.spec.colors || {})[k] || "#808080"}">${esc(label)}</label>`).join("")}</div>
-    <div class="chips"><button class="chip primary" data-custom-done="1">Done</button></div>` : "";
+    <div class="chips"><button class="chip primary" data-custom-done="1">Done</button><button class="chip" data-save-palette="1">Save as my palette</button></div>` : "";
   return `<div class="chips">${game}<button class="chip" data-colours="design" data-label="The design's own">The design's own</button>`
+    + (p.mine || []).map((x) => `<button class="chip" data-colours="${x.id}" data-label="${esc(x.label)}">${dots(x.colors)}${esc(x.label)}<span class="x" data-forget="${x.id}" title="Forget this palette">×</span></button>`).join("")
     + p.presets.map((x) => `<button class="chip" data-colours="${x.id}" data-label="${esc(x.label)}">${dots(x.colors)}${esc(x.label)}</button>`).join("")
     + `<button class="chip" data-custom="1">Custom…</button></div>${custom}`;
 }
@@ -245,7 +289,7 @@ function live() {
   $("budget").innerHTML = `<div style="display:flex;justify-content:space-between"><span>Budget used</span><span>${usd(c.used_usd)} of ${usd(c.budget_usd)} (${pct > 0 && pct < 1 ? "<1" : pct.toFixed(0)}%)</span></div>`
     + `<div class="bar"><div style="width:${Math.max(pct, c.used_usd > 0 ? 1 : 0)}%;background:${pct > 90 ? "var(--bad)" : "var(--accent)"}"></div></div>`;
   const lk = c.look || {};
-  $("costs").innerHTML = `<table>${c.costs.map((r) => `<tr><td>${r.step === "look" ? "Look" : "Write"}: ${esc(r.model)}${r.ok < r.calls ? ` <span class="bad">(${r.calls - r.ok} failed)</span>` : ""}</td><td>${usd(r.usd)}</td></tr>`).join("")}
+  $("costs").innerHTML = `<table>${c.costs.map((r) => `<tr><td>${{ look: "Look", write: "Write", edit: "Edit" }[r.step] || r.step}: ${esc(r.model)}${r.ok < r.calls ? ` <span class="bad">(${r.calls - r.ok} failed)</span>` : ""}</td><td>${usd(r.usd)}</td></tr>`).join("")}
     <tr><td>Reading, previews, drawing: code</td><td>free</td></tr></table>`
     + (lk.game ? `<div class="muted" style="margin-top:6px">${esc(lk.game)}${[lk.bg, lk.accent].filter(Boolean).map((h) => `<span class="sw" style="background:${h}"></span>${h}`).join("")}</div>` : "");
 }
@@ -315,10 +359,13 @@ function pickFile(f) {
 }
 
 $("log").addEventListener("click", (e) => {
-  const t = e.target.closest("[data-topic],[data-skip],[data-design],[data-colours],[data-custom],[data-custom-done],[data-headline],[data-own],[data-goto],[data-restart],[data-keep],[data-keep-words],#drop");
+  const t = e.target.closest("[data-forget],[data-topic],[data-skip],[data-design],[data-colours],[data-custom],[data-custom-done],[data-save-palette],[data-headline],[data-own],[data-goto],[data-restart],[data-keep],[data-keep-words],[data-close-library],#drop");
   if (!t) return;
   if (t.id === "drop") return $("file").click();
   const d = t.dataset;
+  if (d.forget) { e.stopPropagation(); return forgetPalette(d.forget); }
+  if (d.savePalette) return savePalette();
+  if (d.closeLibrary) { S.library = null; return render(); }
   if (d.topic) { $("text").value = TOPICS[d.topic]; $("text").focus(); $("text").setSelectionRange(0, 0); }
   else if (d.skip) start("");
   else if (d.design) choose({ design: d.design }, "design");
@@ -339,10 +386,46 @@ $("log").addEventListener("change", (e) => {
 $("log").addEventListener("dragover", (e) => { if (S.step === "frame") { e.preventDefault(); $("drop")?.classList.add("over"); } });
 $("log").addEventListener("drop", (e) => { if (S.step === "frame") { e.preventDefault(); pickFile(e.dataTransfer.files[0]); } });
 
+$("quick").addEventListener("click", (e) => { const t = e.target.closest("[data-say]"); if (t) say(t.dataset.say); });
+
+async function say(message) {  // a typed or one-tap edit, answered in the chat
+  if (S.thinking) return;
+  S.thinking = true;
+  S.cover = { ...S.cover, messages: [...(S.cover.messages || []), { role: "user", text: message }] };
+  render();
+  try { S.cover = await api(`/api/covers/${S.cover.id}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }) }); }
+  catch (err) { S.cover = { ...S.cover, messages: [...S.cover.messages, { role: "bot", text: err.message, by: "code" }] }; }
+  S.thinking = false;
+  S.previews = null;
+  render();
+}
+
+async function savePalette() {
+  const name = prompt("Name this palette");
+  if (!name) return;
+  try {
+    await api("/api/palettes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, colors: S.cover.spec.colors }) });
+    S.palettes = await api("/api/palettes");
+    S.colourLabel = name;
+    render();
+  } catch (err) { alert(err.message); }
+}
+
+async function forgetPalette(id) {
+  try { await api("/api/palettes/" + encodeURIComponent(id), { method: "DELETE" }); S.palettes = await api("/api/palettes"); render(); }
+  catch (err) { alert(err.message); }
+}
+
+$("library").addEventListener("click", async () => {
+  try { S.library = await api("/api/covers"); } catch (err) { S.library = []; }
+  render();
+});
+
 $("composer").addEventListener("submit", (e) => {
   e.preventDefault();
   const v = $("text").value.trim();
   $("text").value = "";
+  if (S.step === "ready" && S.editing !== "headline") { if (v) say(v); return; }
   if (S.editing === "headline") {
     const [a, b] = v.includes("/") ? v.split("/").map((x) => x.trim()) : ["", v];
     if (!b) return;
@@ -364,6 +447,8 @@ function restart() {
 }
 
 // --- start ---------------------------------------------------------------------------------------------
+
+if (window.matchMedia("(min-width: 900px)").matches) $("details").open = true;  // folded on a phone
 
 Promise.all([api("/api/designs"), api("/api/palettes")]).then(async ([ds, p]) => {
   S.designs = ds; S.palettes = p;

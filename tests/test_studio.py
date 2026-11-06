@@ -91,12 +91,16 @@ HEADLINES = {"options": [WORDS,
 
 @pytest.fixture
 def fake(monkeypatch):
-    seen = {"calls": [], "fail": set()}
+    seen = {"calls": [], "fail": set(), "edit": {"reply": "Shorter now.", "line1": "No more", "line2": "Deleting", "highlight": None,
+                                                    "pill_left": "", "pill_right": None, "design": "made_up", "colors": {"big": "#ff0000", "nope": "#000000"},
+                                                    "arrow": None, "punch_in": None}}
 
     def reply(model, system, text, image):
         seen["calls"].append((model, image))
         if model in seen["fail"]:
             raise RuntimeError("provider down")
+        if "<message>" in text:
+            return seen["edit"]
         return LOOK if "<frame_read_by_code>" in text else HEADLINES
 
     monkeypatch.setattr(nebius, "FAKE", reply)
@@ -293,3 +297,107 @@ def test_a_preset_stays_readable_on_any_design_but_custom_colours_are_kept(fake)
     assert all(k["ok"] for k in e["checks"]["cut"] if k["id"] == "contrast"), e["checks"]["cut"]
     e = c.patch(f"/api/covers/{cov['id']}", json={"colors": {"small": "#BFD4FF"}}).json()
     assert e["spec"]["colors_from"] == "custom" and e["readability"]  # picked by hand: kept, and flagged
+
+
+# --- phase 3: edits in the chat, undo, my palettes, the library -----------------------------------
+
+def _say(c, cid, message):
+    r = c.post(f"/api/covers/{cid}/chat", json={"message": message})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_simple_edits_are_done_by_code_for_free(fake):
+    c = TestClient(app)
+    cov = _make(c)
+    cid, calls = cov["id"], len(fake["calls"])
+    e = _say(c, cid, "Make the headline red")
+    assert e["spec"]["colors"]["big"] == "#E53935" and e["spec"]["colors_from"] == "custom"
+    e = _say(c, cid, "background #102030")
+    assert e["spec"]["colors"]["bg"] == "#102030"
+    e = _say(c, cid, "remove the arrow")
+    assert e["spec"]["arrow"] is False
+    e = _say(c, cid, "zoom out")
+    assert e["spec"]["punch_in"] is False
+    e = _say(c, cid, "remove the pill")
+    assert e["spec"]["pill_left"] is None and e["spec"]["pill_right"] is None
+    e = _say(c, cid, "use the sunset poster")
+    assert e["spec"]["design"] == "sunset_poster"
+    before = e["spec"]["design"]
+    e = _say(c, cid, "another design")
+    assert e["spec"]["design"] != before
+    e = _say(c, cid, "other colours")
+    assert e["spec"]["colors_from"] != "custom"
+    e = _say(c, cid, "undo")
+    assert e["spec"]["colors_from"] == "custom" and e["can_undo"]
+    assert len(fake["calls"]) == calls  # no model was asked
+    bots = [m for m in e["messages"] if m["role"] == "bot"]
+    assert len(bots) == 9 and all(m["by"] == "code" and m["usd"] == 0 for m in bots)
+    assert c.get(f"/api/covers/{cid}").json()["messages"] == e["messages"]  # kept on the cover
+
+
+def test_anything_else_goes_to_glm_and_bad_changes_are_dropped(fake):
+    c = TestClient(app)
+    cov = _make(c)
+    e = _say(c, cov["id"], "make it punchier and less wordy")
+    assert fake["calls"][-1] == ("glm-5.3-flash", False)
+    sp = e["spec"]
+    assert (sp["line1"], sp["line2"], sp["pill_left"]) == ("No more", "Deleting", None)
+    assert sp["design"] == cov["spec"]["design"]  # a made-up design is ignored
+    assert sp["colors"]["big"] == "#FF0000" and "nope" not in sp["colors"]
+    assert e["messages"][-1] == {**e["messages"][-1], "role": "bot", "text": "Shorter now.", "by": "glm-5.3-flash"}
+    assert any(r["step"] == "edit" for r in e["costs"])
+
+
+def test_with_no_budget_left_the_chat_says_so_and_the_buttons_still_work(fake, monkeypatch):
+    c = TestClient(app)
+    cov = _make(c)
+    monkeypatch.setattr(settings, "budget_usd", 0.0000001)
+    from studio import covers
+    covers.update(cov["id"], budget_usd=0.0000001)
+    calls = len(fake["calls"])
+    e = _say(c, cov["id"], "rewrite it as a question")
+    assert len(fake["calls"]) == calls and "budget" in e["messages"][-1]["text"]
+    e = _say(c, cov["id"], "make the headline gold")  # free: still works
+    assert e["spec"]["colors"]["big"] == "#D4AF37"
+
+
+def test_undo_goes_back_one_version_at_a_time(fake):
+    c = TestClient(app)
+    cov = _make(c)
+    cid = cov["id"]
+    assert c.post(f"/api/covers/{cid}/undo").status_code == 409  # nothing yet
+    c.patch(f"/api/covers/{cid}", json={"design": "sunset_poster"})
+    c.patch(f"/api/covers/{cid}", json={"headline": 1})
+    c.patch(f"/api/covers/{cid}", json={"headline": 1})  # no change: no new version
+    e = c.post(f"/api/covers/{cid}/undo").json()
+    assert (e["spec"]["design"], e["spec"]["line2"], e["headline"]) == ("sunset_poster", "Again", 0)
+    e = c.post(f"/api/covers/{cid}/undo").json()
+    assert e["spec"]["design"] == cov["spec"]["design"] and not e["can_undo"]
+
+
+def test_my_palettes_are_saved_used_and_kept_exactly(fake):
+    c = TestClient(app)
+    r = c.post("/api/palettes", json={"name": "  Store  Blue ", "colors": {"bg": "#002B7F", "big": "#FFFFFF", "small": "#BFD4FF"}})
+    assert r.status_code == 201, r.text
+    mine = r.json()
+    assert mine["label"] == "Store Blue" and mine["id"].startswith("mine:")
+    assert c.post("/api/palettes", json={"name": "", "colors": {"bg": "#002B7F"}}).status_code == 422
+    assert c.post("/api/palettes", json={"name": "Empty", "colors": {}}).status_code == 422
+    assert [x["id"] for x in c.get("/api/palettes").json()["mine"]] == [mine["id"]]
+    cov = _make(c)
+    e = c.patch(f"/api/covers/{cov['id']}", json={"design": "staff_hook", "colors": mine["id"]}).json()
+    assert e["spec"]["colors"]["small"] == "#BFD4FF" and e["spec"]["colors_from"] == mine["id"]
+    assert e["readability"]  # light text on the white studio: the user's own colours are kept, and flagged
+    assert c.delete("/api/palettes/" + mine["id"]).status_code == 200
+    assert c.delete("/api/palettes/" + mine["id"]).status_code == 404
+    assert c.patch(f"/api/covers/{cov['id']}", json={"colors": mine["id"]}).status_code == 422
+
+
+def test_the_library_lists_covers_newest_first(fake):
+    c = TestClient(app)
+    first, second = _make(c), _make(c)
+    ids = [x["id"] for x in c.get("/api/covers").json()]
+    assert ids.index(second["id"]) < ids.index(first["id"])
+    item = next(x for x in c.get("/api/covers").json() if x["id"] == second["id"])
+    assert item["status"] == "done" and item["title"] and "/cut.png" in item["thumb"]

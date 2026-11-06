@@ -163,7 +163,8 @@ def create(data: bytes, context: str) -> dict:
     img.convert("RGB").save(folder(cid) / "frame.png")  # one format downstream; nothing else from the upload is kept
     c = {"id": cid, "created_at": datetime.now(UTC).isoformat(), "status": "queued", "stage": None, "error": None,
          "context": context.strip()[:20000], "budget_usd": settings.budget_usd, "calls": [], "facts": None, "faces": [],
-         "look": None, "spec": None, "why": None, "checks": {}, "cut_available": False, "version": 0}
+         "look": None, "spec": None, "why": None, "checks": {}, "cut_available": False, "version": 0,
+         "history": [], "messages": []}
     with LOCK:
         save(c)
     return c
@@ -327,9 +328,40 @@ def edit(cid: str, changes: dict) -> dict:
         raise CoverError(str(e)[:300]) from e
     if not spec.line2.strip():
         raise CoverError("the big line cannot be empty")
-    update(cid, spec=spec.model_dump(), **({"headline": chosen} if chosen is not None else {}),
+    if spec.model_dump() == c["spec"]:
+        return c  # nothing changed: no new version, nothing to undo
+    history = (c.get("history") or []) + [{"spec": c["spec"], "headline": c.get("headline"), "why": c.get("why")}]
+    update(cid, spec=spec.model_dump(), history=history[-HISTORY:], **({"headline": chosen} if chosen is not None else {}),
            **({"why": c["headlines"][chosen]["why"]} if chosen is not None and chosen >= 0 else {}))
     return draw(cid)
+
+
+HISTORY = 30  # versions kept for undo
+
+
+def undo(cid: str) -> dict:
+    """Back to the version before the last change (drawn again: code only)."""
+    c = load(cid)
+    if not c.get("history"):
+        raise CoverError("nothing to undo", 409)
+    *rest, last = c["history"]
+    update(cid, spec=last["spec"], headline=last["headline"], why=last["why"], history=rest)
+    return draw(cid)
+
+
+def recent(limit: int = 30) -> list[dict]:
+    """The covers made here, newest first, for the library."""
+    root = settings.data_dir / "covers"
+    items = []
+    for d in root.iterdir() if root.exists() else []:
+        try:
+            c = json.loads((d / "cover.json").read_text())
+        except (OSError, ValueError):
+            continue
+        items.append({"id": c["id"], "created_at": c["created_at"], "status": c["status"],
+                      "title": " ".join(filter(None, [(c.get("spec") or {}).get("line1"), (c.get("spec") or {}).get("line2")])) or "(not finished)",
+                      "thumb": f"/api/covers/{c['id']}/cut.png?v={c['version']}" if c.get("version") else f"/api/covers/{c['id']}/frame.png"})
+    return sorted(items, key=lambda x: x["created_at"], reverse=True)[:limit]
 
 
 def colors_named(c: dict, name: str) -> palette.Colors:
@@ -337,6 +369,11 @@ def colors_named(c: dict, name: str) -> palette.Colors:
         return game_colors(c.get("look"))
     if name == "design":
         return palette.Colors()  # every role left to the design
+    if name.startswith("mine:"):
+        item = next((x for x in palette.saved() if x["id"] == name), None)
+        if not item:
+            raise CoverError("that saved palette is gone")
+        return palette.Colors(**item["colors"])
     if name not in palette.PRESETS:
         raise CoverError(f"no colour preset called {name!r}")
     return palette.Colors(**palette.PRESETS[name]["colors"])
@@ -411,6 +448,7 @@ def out(c: dict) -> dict:
         r["usd"] = round(r["usd"] + x["usd"], 6)
     return {k: c[k] for k in ("id", "status", "stage", "error", "context", "budget_usd", "look", "spec", "why", "checks", "created_at")} | {
         "recommended": c.get("recommended") or [], "headlines": c.get("headlines") or [], "headline": c.get("headline"),
+        "messages": c.get("messages") or [], "can_undo": bool(c.get("history")),
         "costs": list(rows.values()), "used_usd": spent(c),
         "cut_available": c.get("cut_available", False), "frame": f"/api/covers/{c['id']}/frame.png",
         "images": {n: f"/api/covers/{c['id']}/{n}.png?v={c['version']}" for n in VERSIONS} if c["version"] else None,

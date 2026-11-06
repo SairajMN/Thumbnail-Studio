@@ -1,9 +1,15 @@
 """Colours by role. Every role can be set by the user (a preset, the game's colours, or picked one by one) or left to
 the design; what neither sets comes from the house colours, chosen to read on the background."""
 
+import json
+import re
+import threading
+import uuid
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
+
+from studio.config import settings
 
 HEX = r"^#[0-9A-Fa-f]{6}$"
 BLUE, YELLOW, NAVY, WHITE, INK = "#0050D0", "#FFC400", "#0A1640", "#FFFFFF", "#111111"
@@ -34,6 +40,42 @@ PRESETS: dict[str, dict] = {  # name -> label and colours; "game" (the look mode
     "days_of_play": {"label": "Days of Play blue", "colors": {"bg": "#1D2BD8", "big": WHITE, "small": "#BFD4FF", "highlight": "#36E2C8", "pill": "#36E2C8", "glow": "#36E2C8"}},
     "mono": {"label": "Black and white", "colors": {"bg": INK, "big": WHITE, "small": "#BBBBBB", "highlight": WHITE, "pill": WHITE, "glow": WHITE}},
 }
+
+
+# --- my palettes: colour sets the user saved, kept in data/palettes.json -------------------------
+
+_SAVED_LOCK = threading.Lock()
+
+
+def _saved_file():
+    return settings.data_dir / "palettes.json"
+
+
+def saved() -> list[dict]:
+    p = _saved_file()
+    return json.loads(p.read_text()) if p.exists() else []
+
+
+def save(name: str, colors: Colors) -> dict:
+    name = re.sub(r"\s+", " ", name).strip()[:40]
+    if not name:
+        raise ValueError("a palette needs a name")
+    if not any(colors.model_dump().values()):
+        raise ValueError("a palette needs at least one colour")
+    item = {"id": "mine:" + uuid.uuid4().hex[:10], "label": name, "colors": colors.model_dump(), "mine": True}
+    with _SAVED_LOCK:
+        items = [x for x in saved() if x["label"].lower() != name.lower()] + [item]  # a name saved again replaces the old one
+        _saved_file().parent.mkdir(parents=True, exist_ok=True)
+        _saved_file().write_text(json.dumps(items[-50:], indent=1))
+    return item
+
+
+def forget(palette_id: str) -> bool:
+    with _SAVED_LOCK:
+        items = saved()
+        kept = [x for x in items if x["id"] != palette_id]
+        _saved_file().write_text(json.dumps(kept, indent=1))
+    return len(kept) < len(items)
 
 
 @dataclass(frozen=True)

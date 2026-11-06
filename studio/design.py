@@ -497,7 +497,7 @@ def _words(spec: Spec, pal: Pal) -> tuple[Image.Image, dict, dict]:
 
 def palette_for(spec: Spec, frame: Image.Image) -> Pal:
     light = float(np.asarray(frame.convert("L").resize((64, 64))).mean()) > 118
-    return resolve(spec.colors, spec.recipe.colors, designs.wash_of(spec.recipe), light, keep=spec.colors_from == "custom")
+    return resolve(spec.colors, spec.recipe.colors, designs.wash_of(spec.recipe), light, keep=spec.colors_from == "custom" or spec.colors_from.startswith("mine:"))
 
 
 def draw(spec: Spec, frame: Image.Image, faces: list[Box] = (), mask: np.ndarray | None = None, product: Box | None = None,
