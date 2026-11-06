@@ -57,14 +57,14 @@ def test_punch_in_makes_the_subject_bigger_and_pop_draws_an_outline():
     _, small = design.draw(SPEC.model_copy(update={"punch_in": False}), _frame(), face, mask)
     _, big = design.draw(SPEC, _frame(), face, mask)
     assert big["heads"][0][2] > small["heads"][0][2] * 1.2
-    flat, _ = design.draw(SPEC.model_copy(update={"pop": False, "punch_in": False}), _frame(), face, mask)
+    flat, _ = design.draw(SPEC.model_copy(update={"punch_in": False}), _frame(), face, mask, cut=False)
     popped, rep = design.draw(SPEC.model_copy(update={"punch_in": False}), _frame(), face, mask)
     white = lambda im: (np.asarray(im) > 250).all(-1).sum()  # noqa: E731  the outline is pure white
     assert white(popped) > white(flat) + 2000
 
 
 def test_no_cut_out_without_a_person_or_the_product():
-    plain, _ = design.draw(SPEC.model_copy(update={"pop": False}), _frame(), [], _mask())
+    plain, _ = design.draw(SPEC, _frame(), [], _mask(), cut=False)
     no_subject, _ = design.draw(SPEC, _frame(), [], _mask())  # a salient blob, but no face and no product
     assert np.abs(np.asarray(plain, np.int16) - np.asarray(no_subject, np.int16)).mean() < 1
 
@@ -116,7 +116,8 @@ def test_frame_and_context_become_a_cover_kimi_looks_glm_writes(fake):
     assert fake["calls"] == [("kimi-k3", True), ("glm-5.3", False)]  # only the vision model gets the frame
     assert cov["look"]["hook"].startswith("Never delete") and cov["look"]["product"] == [0.4, 0.5, 0.2, 0.2]
     s = cov["spec"]
-    assert (s["line2"], s["highlight"], s["bg"], s["accent"], s["arrow"]) == ("Again", "delete", "#0A0A2E", "#CDFD4A", True)
+    assert (s["line2"], s["highlight"], s["arrow"], s["design"]) == ("Again", "delete", True, "studio_pedestal")  # from the template
+    assert (s["colors"]["bg"], s["colors"]["big"], s["colors"]["highlight"]) == ("#0A0A2E", "#CDFD4A", None)  # the game's, by role
     assert [(r["step"], r["model"]) for r in cov["costs"]] == [("look", "Kimi K3"), ("write", "GLM 5.3")]
     assert cov["used_usd"] == 0 and cov["budget_usd"] == 0.15  # fake replies cost nothing
     # two versions from one run: the subject cut out, and the frame as it is
@@ -133,7 +134,7 @@ def test_frame_and_context_become_a_cover_kimi_looks_glm_writes(fake):
     assert (e["spec"]["line2"], e["spec"]["pill_left"], e["spec"]["punch_in"]) == ("For good", None, False)
     assert all(e["images"][v] != cov["images"][v] for v in ("cut", "plain"))  # both redrawn
     assert len(fake["calls"]) == 2  # an edit calls no model
-    assert c.patch(f"/api/covers/{cov['id']}", json={"accent": "green"}).status_code == 422
+    assert c.patch(f"/api/covers/{cov['id']}", json={"colors": {"big": "green"}}).status_code == 422
     assert c.patch(f"/api/covers/{cov['id']}", json={"line2": " "}).status_code == 422
 
 
@@ -180,3 +181,66 @@ def test_bad_input_is_refused():
     assert c.post("/api/covers", files={"frame": ("f.txt", b"not an image", "text/plain")}).status_code == 422
     assert c.get("/api/covers/../../etc").status_code == 404
     assert c.get("/api/covers/" + "0" * 32).status_code == 404
+
+
+# --- designs and colours ------------------------------------------------------------------------
+
+from studio import designs, palette  # noqa: E402
+
+
+@pytest.mark.parametrize("design_id", list(designs.DESIGNS))
+def test_every_design_draws_both_versions_without_covering_a_face(design_id):
+    spec = SPEC.model_copy(update={"design": design_id, "colors": palette.Colors(), "subline": "15 SEPT, 12:00 AM"})
+    for faces, product in (([(0.38, 0.27, 0.24, 0.12)], (0.4, 0.62, 0.2, 0.1)), ([], (0.4, 0.5, 0.2, 0.2)), ([], None)):
+        for cut in (True, False):
+            img, rep = design.draw(spec, _frame(), faces, _mask(), product, design.Path("studio/kit/pegi_16.jpg"), cut=cut)
+            assert img.size == (1080, 1920)
+            bad = [c["detail"] for c in rep["checks"] if not c["ok"] and c["id"] in ("safe_zone", "face_clear", "contrast")]
+            assert not bad, (design_id, cut, faces, bad)
+            if not cut:
+                assert not rep["cut"]
+
+
+def test_sixteen_designs_each_with_its_reference():
+    assert len(designs.DESIGNS) == 16
+    assert all(r.source and r.blurb and r.subject in ("cutout", "pedestal", "silhouette", "card", "frame") for r in designs.DESIGNS.values())
+    assert set(designs.FROM_TEMPLATE.values()) <= set(designs.DESIGNS)
+
+
+def test_colours_by_role_user_first_then_design_then_house():
+    wash = designs.wash_of(designs.DESIGNS["colour_flood"])
+    pal = palette.resolve(palette.Colors(), designs.DESIGNS["colour_flood"].colors, wash, True)
+    assert (pal.bg, pal.big, pal.small) == (palette.YELLOW, palette.INK, palette.INK)
+    assert palette.contrast(pal.highlight, pal.wash) >= 3  # the default highlight can't vanish on the yellow
+    mine = palette.resolve(palette.Colors(highlight="#FFC500", small="#FFC400"), designs.DESIGNS["colour_flood"].colors, wash, True)
+    assert (mine.highlight, mine.small) == ("#FFC500", "#FFC400")  # what the user picks is kept...
+    assert palette.readability(mine)  # ...and they are told it's hard to read
+    dark = palette.resolve(palette.Colors(bg="#040F2C"), designs.DESIGNS["event_flyer"].colors, designs.wash_of(designs.DESIGNS["event_flyer"]), True)
+    assert palette.contrast(dark.small, dark.wash) >= 3  # the design's dark small text turns light on a dark background
+
+
+def test_designs_presets_and_previews_from_the_api(fake):
+    c = TestClient(app)
+    ds = c.get("/api/designs").json()
+    assert len(ds) == 16 and {"id", "name", "from", "blurb"} <= set(ds[0])
+    pal = c.get("/api/palettes").json()
+    assert set(pal["roles"]) == set(palette.ROLES) and any(p["id"] == "wolverine" for p in pal["presets"])
+    cov = _make(c)
+    pv = c.get(f"/api/covers/{cov['id']}/previews").json()
+    assert set(pv) == set(designs.DESIGNS)
+    tile = Image.open(io.BytesIO(c.get(pv["sunset_poster"]).content))
+    assert tile.size == (270, 480)
+    assert c.get(f"/api/covers/{cov['id']}/previews").json() == pv  # cached while nothing changes
+
+    r = c.patch(f"/api/covers/{cov['id']}", json={"design": "sunset_poster", "colors": "wolverine"})
+    assert r.status_code == 200, r.text
+    e = r.json()
+    assert e["spec"]["design"] == "sunset_poster" and e["spec"]["colors"]["bg"] == "#FFC400"
+    e = c.patch(f"/api/covers/{cov['id']}", json={"colors": {"big": "#FF0000", "bg": None}}).json()
+    assert (e["spec"]["colors"]["big"], e["spec"]["colors"]["bg"], e["spec"]["colors"]["small"]) == ("#FF0000", None, palette.INK)
+    assert c.get(f"/api/covers/{cov['id']}/previews").json() != pv  # new colours, new previews
+    e = c.patch(f"/api/covers/{cov['id']}", json={"colors": "game"}).json()
+    assert e["spec"]["colors"]["bg"] == "#0A0A2E"
+    assert c.patch(f"/api/covers/{cov['id']}", json={"design": "nope"}).status_code == 422
+    assert c.patch(f"/api/covers/{cov['id']}", json={"colors": "nope"}).status_code == 422
+    assert c.get(f"/api/covers/{cov['id']}/previews/..%2Fcover.json").status_code == 404

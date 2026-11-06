@@ -6,11 +6,13 @@ Every model call is checked against the budget (BUDGET_USD, $0.15) before it is 
 max_tokens used), so a cover can never cost more than the budget, fallbacks included.
 """
 
+import hashlib
 import io
 import json
 import re
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,7 +20,7 @@ import numpy as np
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from studio import design, frame, kit, nebius
+from studio import design, designs, frame, kit, nebius, palette
 from studio.config import settings
 from studio.design import Spec, Template
 
@@ -212,8 +214,8 @@ def run(cid: str) -> None:
         words, by = _ask(cid, "write", WRITE_MODELS, WRITE_SYSTEM,
                          f"<analysis>\n{json.dumps(analysis, ensure_ascii=False)}\n</analysis>\n<video_context>\n{_context(c['context'])}\n</video_context>",
                          Words, WRITE_MAX)
-        spec = Spec(**words.model_dump(exclude={"why"}), rating=kit.rating_for(f"{c['context']}\n{lk['game'] or ''}"),
-                    game=lk["game"], bg=lk["bg"], accent=lk["accent"])
+        spec = Spec(**words.model_dump(exclude={"why"}), design=designs.FROM_TEMPLATE.get(words.template, "staff_hook"),
+                    rating=kit.rating_for(f"{c['context']}\n{lk['game'] or ''}"), game=lk["game"], colors=game_colors(lk))
         update(cid, spec=spec.model_dump(), why=words.why, stage="draw")
         draw(cid)
         update(cid, status="done", stage=None)
@@ -221,7 +223,15 @@ def run(cid: str) -> None:
         update(cid, status="failed", stage=None, error=str(e)[:1500] if isinstance(e, CoverError) else f"{type(e).__name__}: {str(e)[:1500]}")
 
 
-VERSIONS = {"cut": True, "plain": False}  # the cover's two versions: subject cut out (pop) or not
+VERSIONS = {"cut": True, "plain": False}  # the cover's two versions: subject cut out, or the frame itself
+
+
+def game_colors(look: dict | None) -> palette.Colors:
+    """The look model's colours for the game, by role: its background, and its accent for the big line, the pill and
+    the glow. The highlight is left to the design, which keeps it readable on its background."""
+    lk = look or {}
+    a = lk.get("accent")
+    return palette.Colors(bg=lk.get("bg"), big=a, pill=a, glow=a)
 
 
 def draw(cid: str) -> dict:
@@ -233,15 +243,15 @@ def draw(cid: str) -> dict:
     product = (c["look"] or {}).get("product")
     frame_img, checks, cut = Image.open(folder(cid) / "frame.png"), {}, False
     for name, pop in VERSIONS.items():
-        img, rep = design.draw(spec.model_copy(update={"pop": pop}), frame_img, [tuple(f) for f in c["faces"]], mask,
-                               tuple(product) if product else None, kit.label_path(spec.rating))
+        img, rep = design.draw(spec, frame_img, [tuple(f) for f in c["faces"]], mask,
+                               tuple(product) if product else None, kit.label_path(spec.rating), cut=pop)
         img.save(folder(cid) / f"cover-{name}.png", optimize=True)
         checks[name] = rep["checks"]
         cut = cut or rep["cut"]
     return update(cid, checks=checks, cut_available=cut, version=c["version"] + 1)
 
 
-EDITABLE = {"line1", "line2", "highlight", "pill_left", "pill_right", "name_tag", "bg", "accent", "punch_in", "arrow", "wave", "rating"}
+EDITABLE = {"design", "colors", "line1", "line2", "highlight", "subline", "pill_left", "pill_right", "name_tag", "punch_in", "arrow", "wave", "rating"}
 
 
 def edit(cid: str, changes: dict) -> dict:
@@ -251,6 +261,12 @@ def edit(cid: str, changes: dict) -> dict:
     bad = set(changes) - EDITABLE
     if bad:
         raise CoverError(f"cannot change {', '.join(sorted(bad))}")
+    if "design" in changes and changes["design"] not in designs.DESIGNS:
+        raise CoverError(f"no design called {changes['design']!r}")
+    if isinstance(changes.get("colors"), str):  # a preset by name, or "game" for the look model's colours
+        changes["colors"] = colors_named(c, changes["colors"]).model_dump()
+    elif "colors" in changes:  # only the roles given change; null puts a role back to the design's own colour
+        changes["colors"] = {**c["spec"].get("colors", {}), **changes["colors"]}
     try:
         spec = Spec.model_validate({**c["spec"], **changes})
     except ValueError as e:
@@ -259,6 +275,60 @@ def edit(cid: str, changes: dict) -> dict:
         raise CoverError("the big line cannot be empty")
     update(cid, spec=spec.model_dump())
     return draw(cid)
+
+
+def colors_named(c: dict, name: str) -> palette.Colors:
+    if name == "game":
+        return game_colors(c.get("look"))
+    if name == "design":
+        return palette.Colors()  # every role left to the design
+    if name not in palette.PRESETS:
+        raise CoverError(f"no colour preset called {name!r}")
+    return palette.Colors(**palette.PRESETS[name]["colors"])
+
+
+# --- previews of every design -------------------------------------------------------------------
+
+PREVIEW_W, PREVIEW_H = 270, 480
+# previews drawn by older drawing code are drawn again: the cache key includes the code's own fingerprint
+CODE_TAG = hashlib.sha256(b"".join((Path(__file__).parent / n).read_bytes() for n in ("design.py", "designs.py", "palette.py"))).hexdigest()[:12]
+
+
+def _preview_key(c: dict, design_id: str) -> str:
+    spec = {k: v for k, v in (c["spec"] or {}).items() if k != "design"}
+    return hashlib.sha256(json.dumps([CODE_TAG, design_id, spec, c.get("faces"), (c.get("look") or {}).get("product")],
+                                     sort_keys=True).encode()).hexdigest()[:16]
+
+
+def previews(cid: str) -> dict[str, str]:
+    """Every design drawn small from this cover's frame and words (the cut-out version), cached until the words or
+    colours change. Returns design id -> file name under the cover's folder."""
+    c = load(cid)
+    if not c["spec"]:
+        raise CoverError("the cover's words aren't written yet", 409)
+    pdir = folder(cid) / "previews"
+    pdir.mkdir(exist_ok=True)
+    mask_file = folder(cid) / "mask.npy"
+    mask = np.load(mask_file).astype(np.float32) if mask_file.exists() else None
+    product = (c["look"] or {}).get("product")
+    src = Image.open(folder(cid) / "frame.png").convert("RGB")
+    names = {d: f"{d}-{_preview_key(c, d)}.png" for d in designs.DESIGNS}
+
+    def one(design_id: str) -> None:
+        p = pdir / names[design_id]
+        if p.exists():
+            return
+        spec = Spec.model_validate({**c["spec"], "design": design_id})
+        img, _ = design.draw(spec, src, [tuple(f) for f in c["faces"]], mask, tuple(product) if product else None,
+                             kit.label_path(spec.rating))
+        img.resize((PREVIEW_W, PREVIEW_H), Image.LANCZOS).save(p, optimize=True)
+
+    with ThreadPoolExecutor(4) as ex:  # OpenCV lets go of the GIL, so this is about 4x faster
+        list(ex.map(one, names))
+    for old in pdir.glob("*.png"):
+        if old.name not in names.values():
+            old.unlink()
+    return names
 
 
 def options() -> dict:
@@ -287,4 +357,6 @@ def out(c: dict) -> dict:
     return {k: c[k] for k in ("id", "status", "stage", "error", "context", "budget_usd", "look", "spec", "why", "checks", "created_at")} | {
         "costs": list(rows.values()), "used_usd": spent(c),
         "cut_available": c.get("cut_available", False), "frame": f"/api/covers/{c['id']}/frame.png",
-        "images": {n: f"/api/covers/{c['id']}/{n}.png?v={c['version']}" for n in VERSIONS} if c["version"] else None}
+        "images": {n: f"/api/covers/{c['id']}/{n}.png?v={c['version']}" for n in VERSIONS} if c["version"] else None,
+        "readability": palette.readability(design.palette_for(Spec.model_validate(c["spec"]), Image.open(folder(c["id"]) / "frame.png")))
+        if c["spec"] else []}

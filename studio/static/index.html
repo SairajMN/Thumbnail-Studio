@@ -38,6 +38,11 @@
   .checks li { margin: 2px 0; } .ok { color: var(--ok); } .bad { color: var(--bad); }
   .fields { display: grid; gap: 8px; } .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .toggles { display: flex; flex-wrap: wrap; gap: 12px; }
+  select { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; font: inherit; }
+  .roles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .roles label { display: flex; align-items: center; gap: 6px; }
+  .roles input[type=color] { width: 30px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
+  .warn { color: #ffb86b; }
   .stack > * + * { margin-top: 14px; }
 </style>
 </head>
@@ -75,6 +80,10 @@
       <div id="budget"></div>
       <table id="costs" class="small"></table>
       <form id="edit" class="fields">
+        <div class="two"><label class="small">Design<select id="design"></select></label>
+          <label class="small">Colours<select id="preset"></select></label></div>
+        <div id="roles" class="roles small"></div>
+        <div id="warnings" class="small warn"></div>
         <input id="line1" type="text" placeholder="Small line" aria-label="Small line">
         <input id="line2" type="text" placeholder="Big line" aria-label="Big line">
         <div class="two"><input id="highlight" type="text" placeholder="Highlighted word" aria-label="Highlighted word">
@@ -110,6 +119,19 @@ api("/api/options").then((o) => {
     + `<p class="muted">Fallbacks: looking ${o.fallbacks.look.join(", ")}; writing ${o.fallbacks.write.join(", ")}. No call is made that could pass the budget.`
     + (o.key_set ? "" : ` <span class="bad">NEBIUS_API_KEY is not set in .env.</span>`) + `</p>`;
 });
+
+let palettes = { roles: {}, presets: [] };
+api("/api/designs").then((ds) => { $("design").innerHTML = ds.map((d) => `<option value="${d.id}" title="${d.blurb}">${d.name}</option>`).join(""); });
+api("/api/palettes").then((p) => {
+  palettes = p;
+  $("preset").innerHTML = `<option value="">Choose a set…</option><option value="game">Game colours (auto)</option><option value="design">The design's own</option>`
+    + p.presets.map((x) => `<option value="${x.id}">${x.label}</option>`).join("");
+  $("roles").innerHTML = Object.entries(p.roles).map(([k, label]) =>
+    `<label title="${label}"><input type="color" id="c_${k}"><span>${label}</span></label>`).join("");
+  for (const k of Object.keys(p.roles)) $("c_" + k).addEventListener("change", (e) => edit({ colors: { [k]: e.target.value } }));
+});
+$("design").addEventListener("change", (e) => edit({ design: e.target.value }));
+$("preset").addEventListener("change", (e) => { if (e.target.value) edit({ colors: e.target.value }); e.target.value = ""; });
 
 $("drop").addEventListener("click", () => $("file").click());
 $("file").addEventListener("change", (e) => {
@@ -169,6 +191,12 @@ function show(c) {
   const s = c.spec;
   for (const k of ["line1", "line2", "highlight", "pill_left", "pill_right"]) if (document.activeElement !== $(k)) $(k).value = s[k] || "";
   for (const k of ["punch_in", "arrow"]) $(k).checked = s[k];
+  $("design").value = s.design;
+  for (const k of Object.keys(palettes.roles)) {
+    const v = (s.colors || {})[k];
+    if ($("c_" + k)) { $("c_" + k).value = v || "#808080"; $("c_" + k).title = v ? v : "auto: the design's colour"; }
+  }
+  $("warnings").innerHTML = (c.readability || []).map((w) => `<div>! ${w}</div>`).join("");
 }
 
 $("grid").addEventListener("change", (e) => $("pair").classList.toggle("grid34", e.target.checked));

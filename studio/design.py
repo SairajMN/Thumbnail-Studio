@@ -1,13 +1,14 @@
-"""Drawing a reel cover that makes people stop scrolling, at 1080x1920, from a spec: the words are always exact.
+"""Drawing a reel cover that makes people stop scrolling, at 1080x1920, from a spec in one of the designs
+(designs.py): the words are always exact.
 
 Back to front:
-1. punch-in: the frame zoomed so the subject (face, person, product) fills most of the width, colour graded
-   (contrast, saturation, sharpness) and vignetted;
-2. subject pop: behind the cut-out subject, a blurred copy of the frame tinted with the game's background; around it a
-   glow in the game's accent and a white outline, the sticker look viral covers use;
+1. the design's background (a studio, a colour flood, a spotlight, a sunset...) with its decorations;
+2. the subject as the design shows it: cut out with a white outline and a glow, standing on a podium, as a
+   silhouette, in a tilted card, or the frame itself; zoomed in on the subject ("punch-in") and colour graded;
 3. a ring round the product the video is about and a hand-drawn arrow pointing at it;
-4. the headline (a small line with one word highlighted, a huge line in the accent with a thick outline), the pill,
-   the PEGI label and the brand wave, all with a drop shadow, over a wash that never reaches a face.
+4. the headline (a small line with one word highlighted, a huge line with a thick outline, an optional line under it
+   for a date), the pill, the PEGI label and the brand wave, all with a drop shadow, over a wash that never reaches
+   a face.
 Then the cover is checked the way the profile grid shows it: the middle 3:4 (y 240-1680), about 240 px wide.
 Nothing is ever drawn over a head: not a word, the pill, the wash, the ring, the arrow, the label or the wave.
 """
@@ -19,7 +20,11 @@ from typing import Literal
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, model_validator
+
+from studio import designs
+from studio.designs import Recipe
+from studio.palette import BLUE, INK, WHITE, YELLOW, Colors, Pal, contrast, ink_on, lum, resolve, rgb  # noqa: F401  (re-exported)
 
 W, H = 1080, 1920
 SAFE = (60, 240, 1020, 1680)  # the 3:4 profile-grid crop, less a side margin: every word and mark stays inside
@@ -28,10 +33,10 @@ GRID_W = 240  # a cover's width in the profile grid on a phone
 GAP = 60  # clear space between the headline block and the top of a head
 FADE = 240  # how far below the words the wash fades out, when no head is nearer
 WAVE_TOP = 1610  # the wave's highest point; a head reaching below it turns the wave off
-BLUE, YELLOW, NAVY, WHITE, INK = "#0050D0", "#FFC400", "#0A1640", "#FFFFFF", "#111111"
 MIN_CONTRAST = 3.0  # WCAG ratio for large text
 PILL_H = 70
-HEX = r"^#[0-9A-Fa-f]{6}$"
+SUBLINE_PX = 46
+CUT_MODES = {"cutout", "pedestal", "silhouette"}
 
 Template = Literal["staff_hook", "pedestal", "key_art", "group", "winner", "flyer"]
 Box = tuple[float, float, float, float]  # x, y, w, h as fractions of the frame
@@ -40,23 +45,38 @@ PxBox = tuple[int, int, int, int]  # x, y, w, h in canvas pixels
 
 class Spec(BaseModel):
     template: Template = "staff_hook"
+    design: str = "staff_hook"  # a key of designs.DESIGNS
     line1: str = ""
     line2: str
-    highlight: str | None = None  # a word of the small line drawn in the accent, the one the eye should land on
+    highlight: str | None = None  # a word of the small line drawn in the highlight colour, the one the eye should land on
+    subline: str | None = None  # a small line under the big one: a date, a time, a place
     pill_left: str | None = None
     pill_right: str | None = None
     name_tag: str | None = None
     rating: str | None = None  # a brand-kit label (pegi_16), drawn lower left (lower right when a head is there)
     game: str | None = None
-    bg: str | None = Field(None, pattern=HEX)  # the game's background colour; None: white or navy by the picture
-    accent: str | None = Field(None, pattern=HEX)  # the game's accent colour; None: the house yellow
-    pop: bool = True  # cut-out subject with outline and glow over a blurred background
+    colors: Colors = Colors()
     punch_in: bool = True  # zoom in on the subject, and grade the colours
     arrow: bool = True  # ring and arrow on the product, when the analysis found one
-    wave: bool | None = None  # None: on light covers
+    wave: bool | None = None  # None: the design's choice
+
+    @model_validator(mode="before")
+    @classmethod
+    def _older_covers(cls, v):
+        """Covers saved before designs kept the game's colours as bg and accent."""
+        if isinstance(v, dict) and ("bg" in v or "accent" in v):
+            v = dict(v)
+            bg, accent = v.pop("bg", None), v.pop("accent", None)
+            v.setdefault("colors", {"bg": bg, "big": accent, "highlight": accent, "pill": accent, "glow": accent})
+            v.pop("pop", None)
+        return v
+
+    @property
+    def recipe(self) -> Recipe:
+        return designs.DESIGNS.get(self.design, designs.DESIGNS["staff_hook"])
 
 
-# --- colour and type --------------------------------------------------------------------------
+# --- type ---------------------------------------------------------------------------------------
 
 FONTS = {  # (file, style inside a .ttc) in order of preference; macOS first, then any machine's fallback
     "heavy": [("/System/Library/Fonts/Avenir Next.ttc", "Heavy"), ("/System/Library/Fonts/Supplemental/Arial Black.ttf", None)],
@@ -85,31 +105,13 @@ def font(weight: str, px: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(f[0], px, index=f[1]) if f else ImageFont.load_default(size=px)
 
 
-def rgb(c: str) -> tuple[int, int, int]:
-    return int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
+def _width(draw, text: str, f, tracking: float = 0) -> float:
+    return draw.textlength(text, font=f) + tracking * max(0, len(text) - 1)
 
 
-def lum(c) -> float:
-    def ch(v):
-        v /= 255
-        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
-    r, g, b = c
-    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
-
-
-def contrast(a, b) -> float:
-    la, lb = sorted((lum(a), lum(b)), reverse=True)
-    return (la + 0.05) / (lb + 0.05)
-
-
-def ink_on(fill: str) -> str:
-    """Black or white, whichever reads better on `fill`."""
-    return INK if contrast(rgb(INK), rgb(fill)) >= contrast(rgb(WHITE), rgb(fill)) else WHITE
-
-
-def _fit(draw, text: str, weight: str, start: int, low: int, max_w: int) -> tuple[ImageFont.FreeTypeFont, int]:
+def _fit(draw, text: str, weight: str, start: int, low: int, max_w: int, spaced: bool = False) -> tuple[ImageFont.FreeTypeFont, int]:
     px = start
-    while px > low and draw.textlength(text, font=font(weight, px)) > max_w:
+    while px > low and _width(draw, text, font(weight, px), 0.32 * px if spaced else 0) > max_w:
         px -= 4
     return font(weight, px), px
 
@@ -133,9 +135,10 @@ def headline_bottom(spec: Spec) -> int:
     d = ImageDraw.Draw(Image.new("RGB", (8, 8)))
     y = TOP + (70 if spec.name_tag else 0)
     if spec.line1:
-        y += round(_fit(d, spec.line1.upper(), "bold", 76, 40, 920)[1] * 1.05)
+        y += round(_fit(d, spec.line1.upper(), "bold", 76, 40, 920, spec.recipe.spaced)[1] * 1.05)
     lines, _, px2 = _line2(d, spec.line2.upper())
     y += round(px2 * 0.95) * len(lines)
+    y += round(SUBLINE_PX * 1.4) if spec.subline else 0
     return y + (30 + PILL_H if spec.pill_left or spec.pill_right else 0)
 
 
@@ -155,10 +158,12 @@ def _bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
 
 
 def transform(pw: int, ph: int, bottom: int, heads: list[PxBox], subject: tuple[int, int, int, int] | None,
-              punch_in: bool, product: PxBox | None = None) -> tuple[float, float, float]:
+              punch_in: bool, product: PxBox | None = None, fill: float = 0.85, max_bottom: float | None = None,
+              edge_off: bool = True) -> tuple[float, float, float]:
     """Scale and offset (s, ox, oy) that put the frame on the canvas: the subject under the headline, every head at
-    least GAP below the words; with punch-in, zoomed so the subject fills most of the width, but never so far that
-    the product (the frame's pixels) drops out of the profile grid's crop."""
+    least GAP below the words; with punch-in, zoomed so the subject fills `fill` of the width, but never so far that
+    the product (the frame's pixels) drops out of the profile grid's crop, or the subject's bottom passes
+    `max_bottom` (room for a podium)."""
     cover = max(W / pw, H / ph)
     top = bottom + GAP
     if subject is None and heads:
@@ -167,15 +172,15 @@ def transform(pw: int, ph: int, bottom: int, heads: list[PxBox], subject: tuple[
     s = cover
     if punch_in and subject:
         sx, sy, sw, sh = subject
-        # fill 85% of the width, and let the subject run off the bottom by at most a quarter of its height
-        s = min(0.85 * W / max(sw, 1), (H - top) / max(0.75 * (sh + (sy - min((y for _, y, _, _ in heads), default=sy))), 1))
         anchor = min((y for _, y, _, _ in heads), default=sy)
+        # fill the width, and let the subject run off the bottom by at most a quarter of its height
+        s = min(fill * W / max(sw, 1), (H - top) / max(0.75 * (sh + (sy - anchor)), 1))
         if product and product[1] + product[3] > anchor:  # the product's bottom stays 80 px inside the crop
             s = min(s, (SAFE[3] - 80 - top) / (product[1] + product[3] - anchor))
-        s = min(max(s, 0.55 * cover), 2.2 * cover)
+        if max_bottom:
+            s = min(s, (max_bottom - top) / max(sy + sh - anchor, 1))
+        s = min(max(s, 0.3 * cover), 2.2 * cover)
     cx = (subject[0] + subject[2] / 2) if subject else pw / 2
-    if heads:
-        cx = sum(x + w / 2 for x, _, w, _ in heads) / len(heads) if not subject else cx
     ox = W / 2 - cx * s
     if pw * s >= W:
         ox = min(0, max(W - pw * s, ox))
@@ -183,7 +188,7 @@ def transform(pw: int, ph: int, bottom: int, heads: list[PxBox], subject: tuple[
     oy = top - anchor * s if (heads or subject) else 0
     if not punch_in:
         oy = min(max(0, oy), 0.6 * H)  # the original framing only ever moves down
-    if subject and subject[1] + subject[3] >= 0.97 * ph:  # the subject is cut by the frame's bottom: keep that edge off-canvas
+    if edge_off and subject and subject[1] + subject[3] >= 0.97 * ph:  # cut by the frame's bottom: keep that edge off-canvas
         oy = max(oy, H - ph * s)
     return s, ox, oy
 
@@ -202,11 +207,58 @@ def _vignette(a: np.ndarray) -> np.ndarray:
     return a * np.clip(1 - 0.32 * r2, 0.55, 1)[..., None]
 
 
-def picture(spec: Spec, frame: Image.Image, bottom: int, ground: str, faces: list[Box], mask: np.ndarray | None,
-            product: Box | None = None) -> tuple[np.ndarray, list[PxBox], tuple[float, float, float], bool]:
-    """The picture layers (1 and 2) as a float RGB array, the heads in canvas pixels, the transform used, and whether
-    the subject was cut out. It is cut out only when it is a person or the product the video is about: on key art or
-    a busy scene the most salient blob is often a glow or a logo, and a sticker of that looks broken."""
+def _ellipse_k(n: int) -> np.ndarray:
+    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (n, n))
+
+
+def _card(src: Image.Image, bottom: int, heads_src: list[PxBox], focus: tuple[float, float], panel: bool = False,
+          ) -> tuple[Image.Image, tuple[int, int], list[PxBox]]:
+    """The frame in a white-bordered card tilted 4° (or, as a `panel`, straight with rounded corners and no border),
+    placed under the headline: the card, where it goes, and the heads in canvas pixels."""
+    top = bottom + GAP
+    cw = round(W * (0.86 if panel else 0.80))
+    ch = round(max(420, min(cw * 1.25, SAFE[3] - 40 - top)))
+    pad, angle = (0, 0.0) if panel else (18, 4.0)
+    iw, ih = cw - 2 * pad, ch - 2 * pad
+    pw, ph = src.size
+    sc = max(iw / pw, ih / ph)
+    cx0 = min(max(0, focus[0] * sc - iw / 2), pw * sc - iw)
+    cy0 = min(max(0, focus[1] * sc - ih / 2), ph * sc - ih)
+    if heads_src:  # never crop through a head: the topmost one starts inside the card
+        cy0 = max(0, min(cy0, min(y for _, y, _, _ in heads_src) * sc - 20))
+    inner = src.resize((round(pw * sc), round(ph * sc)), Image.LANCZOS).crop((round(cx0), round(cy0), round(cx0) + iw, round(cy0) + ih))
+    card = Image.new("RGBA", (cw, ch), (255, 255, 255, 255))
+    card.paste(inner, (pad, pad))
+    if panel:
+        rounded = Image.new("L", (cw, ch), 0)
+        ImageDraw.Draw(rounded).rounded_rectangle((0, 0, cw - 1, ch - 1), radius=40, fill=255)
+        card.putalpha(rounded)
+    rot = card.rotate(angle, resample=Image.BICUBIC, expand=True)
+    x0, y0 = (W - rot.width) // 2, top
+    th = np.deg2rad(angle)
+
+    def to_canvas(px: float, py: float) -> tuple[float, float]:
+        dx, dy = px - cw / 2, py - ch / 2
+        return x0 + rot.width / 2 + dx * np.cos(th) + dy * np.sin(th), y0 + rot.height / 2 - dx * np.sin(th) + dy * np.cos(th)
+
+    heads = []
+    for x, y, w, h in heads_src:
+        corners = [to_canvas(pad + cx * sc - cx0, pad + cy * sc - cy0) for cx, cy in ((x, y), (x + w, y), (x, y + h), (x + w, y + h))]
+        xs, ys = [c[0] for c in corners], [c[1] for c in corners]
+        l, t = max(min(xs), x0), max(min(ys), y0)  # only what shows inside the card
+        r, b = min(max(xs), x0 + rot.width), min(max(ys), y0 + rot.height)
+        if r > l and b > t:
+            heads.append((round(l), round(t), round(r - l), round(b - t)))
+    return rot, (x0, y0), heads
+
+
+def picture(spec: Spec, pal: Pal, frame: Image.Image, bottom: int, faces: list[Box], mask: np.ndarray | None,
+            product: Box | None = None, cut: bool = True) -> dict:
+    """The picture layers (1 and 2) as a float RGB array, with the heads in canvas pixels, the transform used (None
+    for a card) and the subject treatment drawn. `cut` False draws the design without its cut-out: the frame itself.
+    The subject is cut out only when it is a person or the product the video is about: on key art or a busy scene
+    the most salient blob is often a glow or a logo, and a sticker of that looks broken."""
+    recipe = spec.recipe
     src = frame.convert("RGB")
     pw, ph = src.size
     heads_src = [head((round(x * pw), round(y * ph), round(w * pw), round(h * ph))) for x, y, w, h in faces]
@@ -215,34 +267,60 @@ def picture(spec: Spec, frame: Image.Image, bottom: int, ground: str, faces: lis
         pb = product and (product[0] * pw, product[1] * ph, (product[0] + product[2]) * pw, (product[1] + product[3]) * ph)
         if not (pb and overlap(pb, _xyxy(subject))):
             subject = None  # no person, and not the product: nothing to cut out or zoom in on
-    prod_src = product and (round(product[0] * pw), round(product[1] * ph), round(product[2] * pw), round(product[3] * ph))
-    s, ox, oy = transform(pw, ph, bottom, heads_src, subject, spec.punch_in, prod_src or None)
-    sharp_img = _graded(src) if spec.punch_in else src
-    sharp = _warp(np.asarray(sharp_img, np.float32), s, ox, oy)
-    valid = _warp(np.ones((ph, pw), np.float32), s, ox, oy, cv2.INTER_LINEAR)
-    # the background: the frame covering the canvas, heavily blurred and tinted with the game's background
+    mode = recipe.subject
+    if mode == "pedestal" and heads_src:
+        mode = "cutout"  # people don't stand on a podium
+    if not cut and mode in CUT_MODES or mode in CUT_MODES and subject is None:
+        # without a cut-out: the frame itself; on a design with a background of its own, as a panel on it
+        mode = "frame" if recipe.background in ("blur", "frame") else "panel"
     cover = max(W / pw, H / ph)
-    back = _warp(np.asarray(src, np.float32), cover, (W - pw * cover) / 2, (H - ph * cover) / 2)
-    back = cv2.GaussianBlur(back, (0, 0), 28)
-    back = back * 0.6 + np.float32(rgb(ground)) * 0.4
-    cut = spec.pop and mask is not None and subject is not None
-    if cut:
+    frame_cover = _warp(np.asarray(src, np.float32), cover, (W - pw * cover) / 2, (H - ph * cover) / 2)
+    back = designs.background(recipe, pal, frame_cover, spec.line2)
+    graded = _graded(src) if spec.punch_in else src
+
+    if mode in ("card", "panel"):
+        focus = ((subject[0] + subject[2] / 2) / pw, (subject[1] + subject[3] / 2) / ph) if subject else (0.5, 0.5)
+        back = designs.decorate(back, recipe, pal, seed=7)
+        img = Image.fromarray(np.clip(back, 0, 255).astype(np.uint8)).convert("RGBA")
+        card, (x0, y0), heads = _card(graded, bottom, heads_src, (focus[0] * pw, focus[1] * ph), panel=mode == "panel")
+        shadow = card.getchannel("A").filter(ImageFilter.GaussianBlur(22)).point(lambda v: int(v * 0.45))
+        img.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", card.size, (0, 0, 0)).split(), shadow)), (x0 + 10, y0 + 18))
+        img.alpha_composite(card, (x0, y0))
+        return {"base": np.asarray(img.convert("RGB"), np.float32), "heads": heads, "t": None, "mode": mode}
+
+    pedestal = mode == "pedestal"
+    prod_src = product and (round(product[0] * pw), round(product[1] * ph), round(product[2] * pw), round(product[3] * ph))
+    s, ox, oy = transform(pw, ph, bottom, heads_src, subject, spec.punch_in, prod_src or None,
+                          fill=0.62 if pedestal else 0.85, max_bottom=H * 0.78 if pedestal else None, edge_off=mode not in CUT_MODES)
+    sharp = _warp(np.asarray(graded, np.float32), s, ox, oy)
+    valid = _warp(np.ones((ph, pw), np.float32), s, ox, oy, cv2.INTER_LINEAR)
+    sub_c = subject and (subject[0] * s + ox, subject[1] * s + oy, subject[2] * s, subject[3] * s)
+    sun = sub_c and (sub_c[0] + sub_c[2] / 2, max(bottom + W * 0.3, sub_c[1] + sub_c[3] * 0.25))
+    back = designs.decorate(back, recipe, pal, seed=7, sun_at=sun or (W / 2, H * 0.55))
+    if pedestal and sub_c and sub_c[1] + sub_c[3] < H - 60:
+        back = designs.podium(back, recipe.podium or "glossy", sub_c[0] + sub_c[2] / 2, sub_c[1] + sub_c[3] - sub_c[3] * 0.04,
+                              min(max(sub_c[2] * 1.35, 380), W * 0.92))
+    if mode in CUT_MODES:
         m = _warp(mask, s, ox, oy, cv2.INTER_LINEAR) * valid
-        solid = (m > 0.5).astype(np.uint8)
-        solid = cv2.morphologyEx(solid, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
-        out = cv2.dilate(solid, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (29, 29))).astype(np.float32)
-        glow = cv2.GaussianBlur(cv2.dilate(solid, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (61, 61))).astype(np.float32), (0, 0), 22)
+        solid = cv2.morphologyEx((m > 0.5).astype(np.uint8), cv2.MORPH_OPEN, _ellipse_k(7))
         alpha = cv2.GaussianBlur(solid.astype(np.float32), (0, 0), 1.6)[..., None]
-        base = back * (1 - 0.85 * glow[..., None]) + np.float32(rgb(spec.accent or YELLOW)) * 0.85 * glow[..., None]
-        base = np.where(out[..., None] > 0.5, np.float32(rgb(WHITE)), base)
-        base = base * (1 - alpha) + sharp * alpha
-    else:  # the sharp picture over the background, its edges feathered
+        if mode == "silhouette":  # near-black figure with a thin rim of light
+            rim = cv2.GaussianBlur(cv2.dilate(solid, _ellipse_k(17)).astype(np.float32), (0, 0), 8)[..., None]
+            base = back * (1 - 0.7 * rim) + np.float32(rgb(pal.glow)) * 0.7 * rim
+            base = base * (1 - alpha) + np.float32((12, 12, 14)) * alpha
+        else:
+            out = cv2.dilate(solid, _ellipse_k(29 if mode == "cutout" else 15)).astype(np.float32)
+            glow = cv2.GaussianBlur(cv2.dilate(solid, _ellipse_k(61)).astype(np.float32), (0, 0), 22)[..., None] * (0.85 if mode == "cutout" else 0.4)
+            base = back * (1 - glow) + np.float32(rgb(pal.glow)) * glow
+            base = np.where(out[..., None] > 0.5, np.float32(rgb(WHITE)), base)
+            base = base * (1 - alpha) + sharp * alpha
+    else:  # the frame itself over the background, its edges feathered
         v = cv2.GaussianBlur(cv2.erode(valid, np.ones((25, 25), np.uint8)), (0, 0), 12)[..., None]
         base = back * (1 - v) + sharp * v
-    if spec.punch_in:
+    if spec.punch_in and recipe.background in ("blur", "frame"):
         base = _vignette(base)
     heads = [(round(x * s + ox), round(y * s + oy), round(w * s), round(h * s)) for x, y, w, h in heads_src]
-    return base, heads, (s, ox, oy), cut
+    return {"base": base, "heads": heads, "t": (s, ox, oy), "mode": mode}
 
 
 def wash_end(bottom: int, heads: list[PxBox]) -> int:
@@ -302,120 +380,150 @@ def plan_marks(product: PxBox, heads: list[PxBox], keep_out: list[tuple[int, int
     return marks
 
 
-def _draw_marks(d: ImageDraw.ImageDraw, marks: dict, accent: str) -> dict[str, tuple[int, int, int, int]]:
+def _draw_marks(d: ImageDraw.ImageDraw, marks: dict, colour: str) -> dict[str, tuple[int, int, int, int]]:
     boxes = {}
-    edge = ink_on(accent)
+    edge = ink_on(colour)
     if "ring" in marks:
         r = marks["ring"]
         d.ellipse(r, outline=edge, width=22)
-        d.ellipse(r, outline=accent, width=12)
+        d.ellipse(r, outline=colour, width=12)
         boxes["ring"] = r
     if "arrow" in marks:
         pts = marks["arrow"]
         d.line(pts, fill=edge, width=34, joint="curve")
-        d.line(pts, fill=accent, width=20, joint="curve")
+        d.line(pts, fill=colour, width=20, joint="curve")
         (x1, y1), (x2, y2) = pts[-4], pts[-1]
         ang, size = np.arctan2(y2 - y1, x2 - x1), 64
         tip = (x2 + 14 * np.cos(ang), y2 + 14 * np.sin(ang))
         wing = lambda a: (tip[0] - size * np.cos(ang - a), tip[1] - size * np.sin(ang - a))  # noqa: E731
-        d.polygon([tip, wing(0.5), wing(-0.5)], fill=accent, outline=edge, width=5)
+        d.polygon([tip, wing(0.5), wing(-0.5)], fill=colour, outline=edge, width=5)
         xs, ys = [p[0] for p in pts] + [tip[0]], [p[1] for p in pts] + [tip[1]]
         boxes["arrow"] = (round(min(xs)), round(min(ys)), round(max(xs)), round(max(ys)))
     return boxes
 
 
-def _wave(d: ImageDraw.ImageDraw, accent: str) -> None:
+def _wave(d: ImageDraw.ImageDraw, colour: str) -> None:
     xs = np.linspace(0, W, 60)
-    for base, amp, phase, colour in ((1640, 26, 0.0, accent), (1676, 30, 1.3, BLUE)):
-        d.polygon([(float(x), base + amp * np.sin(x / W * 2 * np.pi + phase)) for x in xs] + [(W, H), (0, H)], fill=colour)
+    for base, amp, phase, c in ((1640, 26, 0.0, colour), (1676, 30, 1.3, BLUE)):
+        d.polygon([(float(x), base + amp * np.sin(x / W * 2 * np.pi + phase)) for x in xs] + [(W, H), (0, H)], fill=c)
 
 
-def _pill(d: ImageDraw.ImageDraw, y: int, left: str | None, right: str | None, accent: str) -> tuple[int, int, int, int]:
+# --- the words ----------------------------------------------------------------------------------
+
+def _pill(d: ImageDraw.ImageDraw, y: int, left: str | None, right: str | None, fill: str, x_left: int | None = None) -> tuple[int, int, int, int]:
     f = font("bold", 34)
     pad, h = 32, PILL_H
     parts = [t for t in (left, right) if t]
     widths = [round(d.textlength(t, font=f)) + 2 * pad for t in parts]
-    x = (W - sum(widths)) // 2
-    if len(parts) == 2:  # white half with a blue outline, then the filled accent half
+    x = x_left if x_left is not None else (W - sum(widths)) // 2
+    if len(parts) == 2:  # white half with a blue outline, then the filled half
         d.rounded_rectangle([x, y, x + sum(widths), y + h], radius=h // 2, fill=WHITE, outline=BLUE, width=3)
-        d.rounded_rectangle([x + widths[0], y, x + sum(widths), y + h], radius=h // 2, fill=accent)
-        d.rectangle([x + widths[0], y, x + widths[0] + h // 2, y + h], fill=accent)
+        d.rounded_rectangle([x + widths[0], y, x + sum(widths), y + h], radius=h // 2, fill=fill)
+        d.rectangle([x + widths[0], y, x + widths[0] + h // 2, y + h], fill=fill)
         d.text((x + widths[0] / 2, y + h / 2), parts[0], font=f, fill=BLUE, anchor="mm")
-        d.text((x + widths[0] + widths[1] / 2, y + h / 2), parts[1], font=f, fill=ink_on(accent), anchor="mm")
+        d.text((x + widths[0] + widths[1] / 2, y + h / 2), parts[1], font=f, fill=ink_on(fill), anchor="mm")
     else:
-        d.rounded_rectangle([x, y, x + widths[0], y + h], radius=h // 2, fill=accent)
-        d.text((x + widths[0] / 2, y + h / 2), parts[0], font=f, fill=ink_on(accent), anchor="mm")
+        d.rounded_rectangle([x, y, x + widths[0], y + h], radius=h // 2, fill=fill)
+        d.text((x + widths[0] / 2, y + h / 2), parts[0], font=f, fill=ink_on(fill), anchor="mm")
     return x, y, x + sum(widths), y + h
 
 
-def _words(spec: Spec, light: bool, accent: str) -> tuple[Image.Image, dict, dict]:
+def _words(spec: Spec, pal: Pal) -> tuple[Image.Image, dict, dict]:
     """The words on their own transparent layer, with a drop shadow; their boxes and sizes."""
+    recipe = spec.recipe
+    left = recipe.align == "left"
+    x_left = SAFE[0] + 20
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     boxes: dict[str, tuple[int, int, int, int]] = {}
-    colour1 = NAVY if light else WHITE
-    stroke2 = INK if lum(rgb(accent)) > 0.3 else WHITE  # the big line always gets a thick outline: the sticker look
+    stroke2 = INK if lum(pal.big) > 0.3 else WHITE  # the big line always gets a thick outline: the sticker look
     y, px1 = TOP, None
     if spec.name_tag:
         f = font("bold", 34)
         tw = round(d.textlength(spec.name_tag.upper(), font=f))
-        boxes["name_tag"] = ((W - tw) // 2 - 26, y, (W + tw) // 2 + 26, y + 54)
-        d.rounded_rectangle(boxes["name_tag"], radius=27, outline=colour1, width=3)
-        d.text((W / 2, y + 27), spec.name_tag.upper(), font=f, fill=colour1, anchor="mm")
+        x0 = x_left if left else (W - tw) // 2 - 26
+        boxes["name_tag"] = (x0, y, x0 + tw + 52, y + 54)
+        d.rounded_rectangle(boxes["name_tag"], radius=27, outline=pal.small, width=3)
+        d.text((x0 + 26 + tw / 2, y + 27), spec.name_tag.upper(), font=f, fill=pal.small, anchor="mm")
         y += 70
     if spec.line1:
         text = spec.line1.upper()
-        f1, px1 = _fit(d, text, "bold", 76, 40, 920)
-        x = (W - d.textlength(text, font=f1)) / 2
+        f1, px1 = _fit(d, text, "bold", 76, 40, 920, recipe.spaced)
+        track = 0.32 * px1 if recipe.spaced else 0
+        width = _width(d, text, f1, track)
+        x = x_left if left else (W - width) / 2
         hi = (spec.highlight or "").upper().strip(" ,.!?")
-        for word in text.split(" "):
-            d.text((x, y), word, font=f1, fill=accent if hi and word.strip(",.!?") == hi else colour1)
-            x += d.textlength(word + " ", font=f1)
-        boxes["line1"] = d.textbbox((W / 2, y), text, font=f1, anchor="mt")
-        boxes["line1"] = (boxes["line1"][0], y, boxes["line1"][2], boxes["line1"][3])
+        if recipe.spaced:
+            for ch in text:
+                d.text((x, y), ch, font=f1, fill=pal.small)
+                x += d.textlength(ch, font=f1) + track
+        else:
+            for word in text.split(" "):
+                d.text((x, y), word, font=f1, fill=pal.highlight if hi and word.strip(",.!?") == hi else pal.small)
+                x += d.textlength(word + " ", font=f1)
+        b = d.textbbox((0, y), text, font=f1)
+        x0 = x_left if left else round((W - width) / 2)
+        boxes["line1"] = (x0, y, round(x0 + width), b[3])
         y += round(px1 * 1.05)
     lines, f2, px2 = _line2(d, spec.line2.upper())
-    sw = max(4, round(px2 * 0.05))
+    sw = max(4, round(px2 * (0.06 if recipe.hollow else 0.05)))
     for i, line in enumerate(lines):
         yy = y + i * round(px2 * 0.95)
-        boxes[f"line2_{i}"] = d.textbbox((W / 2, yy), line, font=f2, anchor="mt", stroke_width=sw)
-        d.text((W / 2, yy), line, font=f2, fill=accent, anchor="mt", stroke_width=sw, stroke_fill=stroke2)
+        xy, anchor = ((x_left, yy), "lt") if left else ((W / 2, yy), "mt")
+        boxes[f"line2_{i}"] = d.textbbox(xy, line, font=f2, anchor=anchor, stroke_width=sw)
+        if recipe.hollow:  # the outline only: drawing the fill transparent clears the inside
+            d.text(xy, line, font=f2, fill=(0, 0, 0, 0), anchor=anchor, stroke_width=sw, stroke_fill=pal.big)
+        else:
+            d.text(xy, line, font=f2, fill=pal.big, anchor=anchor, stroke_width=sw, stroke_fill=stroke2)
     y += round(px2 * 0.95) * len(lines)
+    if spec.subline:
+        fs, _ = _fit(d, spec.subline.upper(), "bold", SUBLINE_PX, 28, 900)
+        xy, anchor = ((x_left, y + 8), "lt") if left else ((W / 2, y + 8), "mt")
+        boxes["subline"] = d.textbbox(xy, spec.subline.upper(), font=fs, anchor=anchor)
+        d.text(xy, spec.subline.upper(), font=fs, fill=pal.small, anchor=anchor)
+        y += round(SUBLINE_PX * 1.4)
     if spec.pill_left or spec.pill_right:
-        boxes["pill"] = _pill(d, y + 30, spec.pill_left, spec.pill_right, accent)
+        boxes["pill"] = _pill(d, y + 30, spec.pill_left, spec.pill_right, pal.pill, x_left if left else None)
     shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     shadow.putalpha(layer.getchannel("A").point(lambda v: int(v * 0.6)).filter(ImageFilter.GaussianBlur(12)))
     out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     out.alpha_composite(shadow, (0, 10))
     out.alpha_composite(layer)
-    return out, boxes, {"line1_px": px1, "line2_px": px2, "stroke": stroke2, "colour1": colour1}
+    return out, boxes, {"line1_px": px1, "line2_px": px2, "stroke": pal.big if recipe.hollow else stroke2}
 
 
 # --- the cover ----------------------------------------------------------------------------------
 
+def palette_for(spec: Spec, frame: Image.Image) -> Pal:
+    light = float(np.asarray(frame.convert("L").resize((64, 64))).mean()) > 118
+    return resolve(spec.colors, spec.recipe.colors, designs.wash_of(spec.recipe), light)
+
+
 def draw(spec: Spec, frame: Image.Image, faces: list[Box] = (), mask: np.ndarray | None = None, product: Box | None = None,
-         rating_img: Path | None = None) -> tuple[Image.Image, dict]:
-    """The cover and its report: the box of every word and mark, the heads, and the checks. `faces` and `mask` come
-    from the frame (studio.frame); `product` is the object the video is about, as the look model found it."""
+         rating_img: Path | None = None, cut: bool = True) -> tuple[Image.Image, dict]:
+    """The cover and its report: the box of every word and mark, the heads, the checks, and the subject treatment
+    used. `faces` and `mask` come from the frame (studio.frame); `product` is the object the video is about, as the
+    look model found it. `cut` False draws the design with the frame itself instead of its cut-out."""
     bottom = headline_bottom(spec)
     src = frame.convert("RGB")
-    light = lum(rgb(spec.bg)) > 0.4 if spec.bg else float(np.asarray(src.convert("L").resize((64, 64))).mean()) > 118
-    ground, accent = spec.bg or (WHITE if light else NAVY), spec.accent or YELLOW
-    base, heads, (s, ox, oy), cut = picture(spec, src, bottom, ground, list(faces), mask, product)
+    pal = palette_for(spec, src)
+    pic = picture(spec, pal, src, bottom, list(faces), mask, product, cut)
+    heads = pic["heads"]
     end = wash_end(bottom, heads)
-    base = _wash(base, bottom, ground, end)
+    base = _wash(pic["base"], bottom, pal.wash, end)
     canvas = Image.fromarray(np.clip(base, 0, 255).astype(np.uint8))
     d = ImageDraw.Draw(canvas)
-    if (spec.wave if spec.wave is not None else light) and not any(t + h > WAVE_TOP for _, t, _, h in heads):
-        _wave(d, accent)
+    if (spec.wave if spec.wave is not None else spec.recipe.wave) and not any(t + h > WAVE_TOP for _, t, _, h in heads):
+        _wave(d, pal.pill)
     under = canvas.copy()  # what the words are checked against
-    words, boxes, sizes = _words(spec, light, accent)
+    words, boxes, sizes = _words(spec, pal)
     marks: dict = {}
-    if spec.arrow and product:
+    if spec.arrow and product and pic["t"] and pic["mode"] != "silhouette":  # a ring round a black shape says nothing
+        s, ox, oy = pic["t"]
         pw, ph = src.size
         px = (round(product[0] * pw * s + ox), round(product[1] * ph * s + oy), round(product[2] * pw * s), round(product[3] * ph * s))
         marks = plan_marks(px, heads, list(boxes.values()), bottom)
-        boxes.update(_draw_marks(d, marks, accent))
+        boxes.update(_draw_marks(d, marks, pal.glow))
     canvas = canvas.convert("RGBA")
     canvas.alpha_composite(words)
     if rating_img and rating_img.exists():
@@ -430,8 +538,9 @@ def draw(spec: Spec, frame: Image.Image, faces: list[Box] = (), mask: np.ndarray
                                                      for t in taken)), spots[0])
         canvas.alpha_composite(badge, (bx, by))
         boxes["rating"] = (bx, by, bx + badge.width, by + badge.height)
-    rep = {"boxes": boxes, "heads": heads, "wash_end": end, "light": light, "cut": cut, **sizes}
-    rep["checks"] = checks(spec, rep, under, accent)
+    rep = {"boxes": boxes, "heads": heads, "wash_end": end, "light": pal.light, "mode": pic["mode"], "cut": pic["mode"] in CUT_MODES,
+           "colour1": pal.small, **sizes}
+    rep["checks"] = checks(spec, rep, under, pal)
     return canvas.convert("RGB"), rep
 
 
@@ -442,7 +551,7 @@ def _mean(img: Image.Image, box) -> tuple[int, int, int]:
     return tuple(int(v) for v in np.asarray(img.crop((l, t, r, b))).reshape(-1, 3).mean(0))
 
 
-def checks(spec: Spec, rep: dict, under: Image.Image, accent: str) -> list[dict]:
+def checks(spec: Spec, rep: dict, under: Image.Image, pal: Pal) -> list[dict]:
     out = []
     l, t, r, b = SAFE
     outside = [k for k, (x0, y0, x1, y1) in rep["boxes"].items() if x0 < l or y0 < t or x1 > r or y1 > b]
@@ -450,10 +559,11 @@ def checks(spec: Spec, rep: dict, under: Image.Image, accent: str) -> list[dict]
                 "detail": "Everything sits inside the profile grid's 3:4 crop." if not outside else f"Cut off in the profile grid: {', '.join(outside)}."})
     worst = None
     for k, box in rep["boxes"].items():
-        if k == "line1":
-            c = contrast(rgb(rep["colour1"]), _mean(under, box))
+        if k in ("line1", "subline"):
+            c = contrast(pal.small, _mean(under, box))
         elif k.startswith("line2"):
-            c = max(contrast(rgb(accent), _mean(under, box)), contrast(rgb(rep["stroke"]), rgb(accent)))
+            c = max(contrast(pal.big, _mean(under, box)), contrast(rep["stroke"], _mean(under, box)) if spec.recipe.hollow
+                    else contrast(rep["stroke"], pal.big))
         else:
             continue
         worst = c if worst is None else min(worst, c)
