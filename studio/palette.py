@@ -71,19 +71,21 @@ def ink_on(fill: str) -> str:
     return INK if contrast(INK, fill) >= contrast(WHITE, fill) else WHITE
 
 
-def resolve(chosen: Colors, design: dict, wash_of, picture_light: bool) -> Pal:
+def resolve(chosen: Colors, design: dict, wash_of, picture_light: bool, keep: bool = True) -> Pal:
     """The user's colours first, then the design's own, then the house colours that read on the background.
-    `wash_of(bg)` is the design's background colour behind the words for a given bg colour."""
+    `wash_of(bg)` is the design's background colour behind the words for a given bg colour. `keep` False (a preset or
+    the game's colours, not picked one by one) lets the small text and highlight change when they'd be unreadable on
+    this design's background."""
     pick = lambda role: getattr(chosen, role) or design.get(role)  # noqa: E731
     bg = pick("bg") or (WHITE if picture_light else NAVY)
     wash = wash_of(bg)
     light = lum(wash) > 0.4
     big = pick("big") or (BLUE if light else YELLOW)
     small = pick("small") or (NAVY if light else WHITE)
-    if not chosen.small and contrast(small, wash) < 3:  # a design's dark text on a background made dark (or the reverse)
+    if (not chosen.small or not keep) and contrast(small, wash) < 3:  # a design's dark text on a background made dark (or the reverse)
         small = NAVY if light else WHITE
     highlight = pick("highlight") or (YELLOW if light else big)
-    if not chosen.highlight and contrast(highlight, wash) < 3:  # a default that vanishes on this background: the first that reads
+    if (not chosen.highlight or not keep) and contrast(highlight, wash) < 3:  # a default that vanishes on this background: the first that reads
         highlight = next((c for c in (big, BLUE, YELLOW, ink_on(wash)) if contrast(c, wash) >= 3 and c != small), ink_on(wash))
     return Pal(bg=bg, big=big, small=small, highlight=highlight, pill=pick("pill") or (YELLOW if light else big), glow=pick("glow") or big,
                wash=wash, light=light)

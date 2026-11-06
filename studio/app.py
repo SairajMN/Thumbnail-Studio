@@ -15,6 +15,7 @@ PAGE = Path(__file__).with_name("static") / "index.html"
 
 class EditIn(BaseModel):
     design: str | None = None
+    headline: int | None = None  # pick one of the written options by its index
     colors: str | dict[str, str | None] | None = None  # a preset name ("game", "house", "fc"...) or roles to change
     subline: str | None = None
     line1: str | None = None

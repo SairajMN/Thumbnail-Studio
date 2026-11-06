@@ -6,105 +6,114 @@
 <title>Thumbnail Studio</title>
 <link rel="icon" href="data:,">
 <style>
-  :root { --bg: #0f1115; --panel: #171a21; --line: #2a2f3a; --text: #e8eaf0; --muted: #9aa1b2; --accent: #4b8bff; --ok: #3ccf8e; --bad: #ff6b6b; }
+  :root { --bg: #0f1115; --panel: #171a21; --bubble: #1f232c; --mine: #2a4f9e; --line: #2a2f3a; --text: #e8eaf0; --muted: #9aa1b2;
+          --accent: #4b8bff; --ok: #3ccf8e; --bad: #ff6b6b; --warn: #ffb86b; }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, sans-serif; }
-  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
-  h1 { margin: 0 0 4px; font-size: 22px; }
-  .sub { color: var(--muted); margin: 0 0 20px; }
-  .grid { display: grid; gap: 20px; grid-template-columns: 1fr; }
-  @media (min-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); } }
-  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .pair figure { margin: 0; } .pair figcaption { margin-top: 6px; }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-  label.drop { display: grid; place-items: center; aspect-ratio: 9/16; max-width: 160px; border: 1px dashed var(--line); border-radius: 10px;
-    color: var(--muted); cursor: pointer; overflow: hidden; text-align: center; }
-  label.drop img { width: 100%; height: 100%; object-fit: cover; }
-  .row { display: flex; gap: 16px; align-items: flex-start; }
-  textarea, input[type=text] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
-  textarea { min-height: 150px; resize: vertical; }
-  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; }
-  button:disabled { opacity: .5; cursor: default; }
-  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
-  .muted { color: var(--muted); } .small { font-size: 12px; }
-  .models div { display: flex; justify-content: space-between; gap: 8px; }
-  .error { color: var(--bad); white-space: pre-wrap; }
-  .pair img { width: 100%; border-radius: 10px; display: block; }
-  .pair.grid34 img { aspect-ratio: 3/4; object-fit: cover; }
+  .app { display: grid; grid-template-columns: 1fr; height: 100vh; }
+  @media (min-width: 900px) { .app { grid-template-columns: minmax(0, 1fr) 400px; } }
+  @media (max-width: 899px) {  /* a phone: the cover on top, kept small, the chat under it */
+    .app { height: auto; }
+    .live { order: -1; border-bottom: 1px solid var(--line); }
+    .shot img { max-height: 46vh; width: auto; max-width: 100%; margin: 0 auto; }
+    .chat { height: 100vh; border-right: 0; }
+  }
+  .chat { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  header b { font-size: 16px; }
+  .log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 640px; padding: 10px 14px; border-radius: 14px; background: var(--bubble); }
+  .msg.bot { align-self: flex-start; border-top-left-radius: 4px; }
+  .msg.me { align-self: flex-end; background: var(--mine); border-top-right-radius: 4px; }
+  .msg .change { color: #c8d6ff; font-size: 12px; margin-left: 8px; cursor: pointer; text-decoration: underline; }
+  .msg img.thumb { display: block; max-width: 120px; border-radius: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .chip { background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  .chip:hover { border-color: var(--accent); }
+  .chip.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .dots { display: inline-flex; gap: 2px; margin-right: 6px; vertical-align: -1px; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; border: 1px solid #0006; display: inline-block; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; margin-top: 10px; }
+  .card { background: none; border: 2px solid transparent; border-radius: 10px; padding: 0; cursor: pointer; color: var(--text); text-align: left; font: inherit; }
+  .card:hover, .card.on { border-color: var(--accent); }
+  .card img, .card .ph { width: 100%; aspect-ratio: 9/16; border-radius: 8px; display: block; background: var(--line); }
+  .card span { display: block; font-size: 12px; padding: 4px 2px 0; }
+  .card em { font-style: normal; font-size: 10px; background: var(--ok); color: #062; border-radius: 4px; padding: 1px 5px; margin-left: 4px; }
+  .heads { display: grid; gap: 8px; margin-top: 10px; }
+  .head { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; text-align: left; color: var(--text); font: inherit; }
+  .head:hover, .head.on { border-color: var(--accent); }
+  .head small { display: block; color: var(--muted); }
+  .head b { display: block; font-size: 18px; letter-spacing: .3px; }
+  .roles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; font-size: 12px; }
+  .roles label { display: flex; align-items: center; gap: 6px; }
+  input[type=color] { width: 30px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
+  .composer { border-top: 1px solid var(--line); padding: 12px 16px; display: flex; gap: 8px; align-items: flex-end; }
+  .composer[hidden] { display: none; }
+  textarea, input[type=text] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; font: inherit; }
+  textarea { min-height: 44px; max-height: 160px; resize: vertical; }
+  button.send { background: var(--accent); color: #fff; border: 0; border-radius: 10px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  .drop { display: grid; place-items: center; border: 1px dashed var(--line); border-radius: 12px; padding: 22px; margin-top: 10px; cursor: pointer; color: var(--muted); }
+  .drop.over { border-color: var(--accent); color: var(--text); }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: s 0.8s linear infinite; margin-right: 6px; vertical-align: -1px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  .live { overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .tabs { display: flex; gap: 6px; }
+  .tabs button { flex: 1; }
+  .tabs button.on { border-color: var(--accent); color: #fff; }
+  .shot { position: relative; }
+  .shot img { width: 100%; border-radius: 12px; display: block; }
+  .shot.grid34 img { aspect-ratio: 3/4; object-fit: cover; }
+  .shot .busy { position: absolute; inset: 0; display: grid; place-items: center; background: #0009; border-radius: 12px; }
   .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 6px; }
   .bar > div { height: 100%; background: var(--accent); }
-  table { width: 100%; border-collapse: collapse; } td { padding: 4px 0; } td:last-child { text-align: right; }
-  .sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--line); vertical-align: -2px; margin-right: 4px; }
-  .checks li { margin: 2px 0; } .ok { color: var(--ok); } .bad { color: var(--bad); }
-  .fields { display: grid; gap: 8px; } .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .toggles { display: flex; flex-wrap: wrap; gap: 12px; }
-  select { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; font: inherit; }
-  .roles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-  .roles label { display: flex; align-items: center; gap: 6px; }
-  .roles input[type=color] { width: 30px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
-  .warn { color: #ffb86b; }
-  .stack > * + * { margin-top: 14px; }
+  .muted { color: var(--muted); } .small { font-size: 12px; } .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; } td { padding: 3px 0; } td:last-child { text-align: right; }
+  .sw { display: inline-block; width: 13px; height: 13px; border-radius: 3px; border: 1px solid var(--line); vertical-align: -2px; margin: 0 3px 0 6px; }
+  a.dl { color: var(--accent); }
+  .empty { color: var(--muted); text-align: center; padding: 40px 10px; border: 1px dashed var(--line); border-radius: 12px; }
 </style>
 </head>
 <body>
-<main>
-  <h1>Thumbnail Studio</h1>
-  <p class="sub">Pick a frame, paste what the video is about, get a cover that makes people watch: one with the subject cut out, one without.</p>
-  <div class="grid">
-    <form id="form" class="panel stack">
-      <div class="row">
-        <label class="drop" id="drop"><span>Choose the frame</span>
-          <input id="file" type="file" accept="image/png,image/jpeg,image/webp" hidden></label>
-        <div style="flex:1" class="stack">
-          <label>Video context <span class="muted small">caption, transcript, game, event (text or JSON)</span>
-            <textarea id="context" placeholder="Midnight launch of Marvel's Wolverine at our Sarjapur store. Fans queued from 10pm. Available now."></textarea></label>
-        </div>
-      </div>
-      <div id="models" class="models small"></div>
-      <div><button id="go" type="submit" disabled>Make cover</button> <span id="status" class="muted"></span></div>
-      <div id="error" class="error"></div>
+<div class="app">
+  <section class="chat">
+    <header><b>Thumbnail Studio</b><button id="restart" class="ghost">New cover</button></header>
+    <div id="log" class="log" aria-live="polite"></div>
+    <form id="composer" class="composer" hidden>
+      <textarea id="text" rows="2"></textarea>
+      <button class="send" type="submit">Send</button>
     </form>
-
-    <section id="result" class="panel stack" hidden>
-      <div id="pair" class="pair">
-        <figure><img id="img_cut" alt="Cover with the subject cut out">
-          <figcaption class="small"><b>With cut-out</b> · <a id="dl_cut" style="color:var(--accent)">Download</a>
-            <div id="chk_cut"></div></figcaption></figure>
-        <figure><img id="img_plain" alt="Cover without cut-out">
-          <figcaption class="small"><b>Without cut-out</b> · <a id="dl_plain" style="color:var(--accent)">Download</a>
-            <div id="chk_plain"></div></figcaption></figure>
-      </div>
-      <div id="cutNote" class="small muted"></div>
-      <label class="small"><input id="grid" type="checkbox"> Show as the profile grid crops it (3:4)</label>
-      <div id="game" class="small"></div>
-      <div id="budget"></div>
-      <table id="costs" class="small"></table>
-      <form id="edit" class="fields">
-        <div class="two"><label class="small">Design<select id="design"></select></label>
-          <label class="small">Colours<select id="preset"></select></label></div>
-        <div id="roles" class="roles small"></div>
-        <div id="warnings" class="small warn"></div>
-        <input id="line1" type="text" placeholder="Small line" aria-label="Small line">
-        <input id="line2" type="text" placeholder="Big line" aria-label="Big line">
-        <div class="two"><input id="highlight" type="text" placeholder="Highlighted word" aria-label="Highlighted word">
-          <span></span></div>
-        <div class="two"><input id="pill_left" type="text" placeholder="Pill (Available)" aria-label="Pill first half">
-          <input id="pill_right" type="text" placeholder="Pill (Now)" aria-label="Pill second half"></div>
-        <div class="toggles small">
-          <label><input id="punch_in" type="checkbox"> Punch-in + grade</label>
-          <label><input id="arrow" type="checkbox"> Arrow on product</label>
-        </div>
-        <div><button type="submit" class="ghost">Update both</button></div>
-        <div id="editError" class="error"></div>
-      </form>
-    </section>
-  </div>
-</main>
+  </section>
+  <aside class="live">
+    <div class="tabs"><button id="t_cut" class="ghost on">With cut-out</button><button id="t_plain" class="ghost">Without cut-out</button></div>
+    <div id="shot" class="shot"><div class="empty">Your cover shows up here, and changes as you answer.</div></div>
+    <div class="small" style="display:flex;justify-content:space-between;align-items:center">
+      <label><input id="grid" type="checkbox"> Profile grid crop (3:4)</label><a id="dl" class="dl" hidden>Download</a></div>
+    <div id="checks" class="small"></div>
+    <div id="budget" class="small"></div>
+    <div id="costs" class="small"></div>
+  </aside>
+</div>
 <script>
 const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const usd = (n) => n === 0 ? "free" : n < 0.01 ? "$" + n.toFixed(4) : "$" + n.toFixed(2);
-const STAGES = { read: "Reading the frame", look: "Looking at the frame", write: "Writing the hook", draw: "Drawing the cover" };
-let frame = null, timer = null, current = null;
+const STAGES = { read: "Reading the frame", look: "Kimi K3 is looking at it", write: "GLM 5.3 is writing headlines", draw: "Drawing" };
+const TOPICS = {
+  "Launch": "Launch of [game] at our store. Available now.",
+  "Unboxing": "Unboxing [product] at our store. In stock now.",
+  "Tournament": "[game] tournament at our store. Winner: [name].",
+  "Happy customer": "A customer picked up [product] at our store. Transcript: '...'",
+  "Offer": "[offer] on [product] this week only.",
+  "Pre-order": "[game] is up for pre-order at our store. Out on [date].",
+};
+const ORDER = ["frame", "context", "working", "design", "colours", "headline", "ready"];
+
+// state: the cover from the server, plus the chat's own progress (kept per cover in this browser)
+let S = { step: "frame", frameUrl: null, file: null, context: null, cover: null, previews: null, designs: [], palettes: null,
+          colourLabel: null, view: "cut", editing: null, warnedFor: null };
+let timer = null;
 
 async function api(path, init) {
   const r = await fetch(path, init);
@@ -112,108 +121,267 @@ async function api(path, init) {
   if (!r.ok) throw new Error(body.detail || r.statusText);
   return body;
 }
+const patch = (changes) => api("/api/covers/" + S.cover.id, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) });
 
-api("/api/options").then((o) => {
-  $("models").innerHTML = `<div><b>Nebius models</b><span class="muted">≈ ${usd(o.est_usd)} · budget ${usd(o.budget_usd)}</span></div>`
-    + o.models.map((m) => `<div><span>${m.step}: ${m.model}</span><span class="muted">${usd(m.est_usd)}</span></div>`).join("")
-    + `<p class="muted">Fallbacks: looking ${o.fallbacks.look.join(", ")}; writing ${o.fallbacks.write.join(", ")}. No call is made that could pass the budget.`
-    + (o.key_set ? "" : ` <span class="bad">NEBIUS_API_KEY is not set in .env.</span>`) + `</p>`;
-});
-
-let palettes = { roles: {}, presets: [] };
-api("/api/designs").then((ds) => { $("design").innerHTML = ds.map((d) => `<option value="${d.id}" title="${d.blurb}">${d.name}</option>`).join(""); });
-api("/api/palettes").then((p) => {
-  palettes = p;
-  $("preset").innerHTML = `<option value="">Choose a set…</option><option value="game">Game colours (auto)</option><option value="design">The design's own</option>`
-    + p.presets.map((x) => `<option value="${x.id}">${x.label}</option>`).join("");
-  $("roles").innerHTML = Object.entries(p.roles).map(([k, label]) =>
-    `<label title="${label}"><input type="color" id="c_${k}"><span>${label}</span></label>`).join("");
-  for (const k of Object.keys(p.roles)) $("c_" + k).addEventListener("change", (e) => edit({ colors: { [k]: e.target.value } }));
-});
-$("design").addEventListener("change", (e) => edit({ design: e.target.value }));
-$("preset").addEventListener("change", (e) => { if (e.target.value) edit({ colors: e.target.value }); e.target.value = ""; });
-
-$("drop").addEventListener("click", () => $("file").click());
-$("file").addEventListener("change", (e) => {
-  frame = e.target.files[0] || null;
-  $("drop").innerHTML = frame ? `<img src="${URL.createObjectURL(frame)}" alt="Picked frame">` : "<span>Choose the frame</span>";
-  $("go").disabled = !frame;
-});
-
-$("form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  $("error").textContent = "";
-  const fd = new FormData();
-  fd.append("frame", frame);
-  fd.append("context", $("context").value);
-  $("go").disabled = true;
-  try {
-    const c = await api("/api/covers", { method: "POST", body: fd });
-    history.replaceState(null, "", "?id=" + c.id);
-    poll(c.id);
-  } catch (err) { $("error").textContent = err.message; $("go").disabled = false; }
-});
-
-function poll(id) {
-  clearTimeout(timer);
-  api("/api/covers/" + id).then((c) => {
-    show(c);
-    if (c.status === "queued" || c.status === "running") timer = setTimeout(() => poll(id), 1500);
-    else $("go").disabled = !frame;
-  }).catch((err) => { $("error").textContent = err.message; });
+function remember() {
+  if (!S.cover) return;
+  try { localStorage.setItem("chat:" + S.cover.id, JSON.stringify({ step: S.step, colourLabel: S.colourLabel, wasReady: S.wasReady })); } catch (e) { /* private mode */ }
+}
+function recall(id) {
+  try { return JSON.parse(localStorage.getItem("chat:" + id) || "null"); } catch (e) { return null; }
 }
 
-function show(c) {
-  current = c;
-  const running = c.status === "queued" || c.status === "running";
-  $("status").textContent = running ? (STAGES[c.stage] || "Starting") + "…" : "";
-  $("error").textContent = c.status === "failed" ? c.error : "";
-  if (!c.images) return;
-  $("result").hidden = false;
-  for (const v of ["cut", "plain"]) {
-    $("img_" + v).src = c.images[v];
-    $("dl_" + v).href = c.images[v] + "&download=1";
-    const bad = (c.checks[v] || []).filter((k) => !k.ok);
-    $("chk_" + v).innerHTML = bad.length ? bad.map((k) => `<div class="bad">! ${k.detail}</div>`).join("")
-      : `<div class="ok">✓ All ${(c.checks[v] || []).length} checks pass</div>`;
+// --- the conversation ----------------------------------------------------------------------------
+
+const bot = (html) => `<div class="msg bot">${html}</div>`;
+const me = (html, step) => `<div class="msg me">${html}${step && S.cover?.status === "done" ? `<span class="change" data-goto="${step}">change</span>` : ""}</div>`;
+const past = (step) => ORDER.indexOf(S.step) > ORDER.indexOf(step);
+
+function render() {
+  const c = S.cover, out = [];
+  out.push(bot("Hi! I'll make a reel cover that gets people to watch. First, drop the frame you picked from the video."
+    + (S.step === "frame" ? `<label class="drop" id="drop">Click or drop an image here<input id="file" type="file" accept="image/png,image/jpeg,image/webp" hidden></label>` : "")));
+  if (S.frameUrl) out.push(me(`<img class="thumb" src="${S.frameUrl}" alt="Your frame">`));
+  if (past("frame")) {
+    out.push(bot("What's the video about? Paste the caption, transcript or a few notes, or tap one to start from."
+      + (S.step === "context" ? `<div class="chips">${Object.keys(TOPICS).map((t) => `<button class="chip" data-topic="${t}">${t}</button>`).join("")}
+         <button class="chip" data-skip="1">Skip: just the frame</button></div>` : "")));
   }
-  $("cutNote").textContent = c.cut_available ? "" : "No person or product the video is about was found to cut out, so both versions are the same.";
-  const lk = c.look || {};
-  $("game").innerHTML = `<b>${lk.game || "No game found"}</b> `
-    + [lk.bg, lk.accent].filter(Boolean).map((h) => `<span class="sw" style="background:${h}"></span>${h}`).join(" ")
-    + (lk.hook ? `<div class="muted">Hook: ${lk.hook}</div>` : "") + (c.why ? `<div class="muted">${c.why}</div>` : "");
+  if (past("context")) out.push(me(esc(S.context) || "<i>No notes, just the frame</i>"));
+  if (past("context") && c) {
+    if (c.status === "failed") out.push(bot(`<span class="bad">That didn't work: ${esc(c.error)}</span><div class="chips"><button class="chip" data-restart="1">Start again</button></div>`));
+    else if (c.status !== "done" || !c.spec) out.push(bot(`<span class="spin"></span>${STAGES[c.stage] || "Starting"}…`));
+    else {
+      const lk = c.look || {};
+      out.push(bot((lk.game ? `I see <b>${esc(lk.game)}</b>. ` : "I don't see a game I'm sure of. ") + esc(lk.seen)
+        + (lk.hook ? `<br><span class="muted">The hook:</span> “${esc(lk.hook)}”` : "")));
+      out.push(bot("Pick a design. Each one is your frame already; the first three suit it best." + (S.step === "design" ? designCards() : "")));
+      if (past("design")) out.push(me("Design: " + esc(designName(c.spec.design)), "design"));
+      if (past("design")) out.push(bot("Which colours?" + (S.step === "colours" ? colourChips() : "")));
+      if (past("colours")) {
+        out.push(me("Colours: " + esc(S.colourLabel || "as they are"), "colours"));
+        if ((c.readability || []).length) out.push(bot(`<span class="warn">${c.readability.map(esc).join(" ")}</span>`
+          + `<div class="chips"><button class="chip" data-colours="design">Let the design pick readable colours</button><button class="chip" data-keep="1">Keep mine</button></div>`));
+      }
+      if (past("colours")) out.push(bot((c.headlines.length ? `Pick a headline. I wrote ${c.headlines.length}, each on a different hook.` : "Keep this headline, or write your own.")
+        + (S.step === "headline" ? headlineCards() : "")));
+      if (past("headline")) out.push(me(`${esc(c.spec.line1)} <b>${esc(c.spec.line2)}</b>`, "headline"));
+      if (S.step === "ready") out.push(bot(readyMessage()));
+    }
+  }
+  $("log").innerHTML = out.join("");
+  $("log").scrollTop = $("log").scrollHeight;
+  const typing = S.step === "context" || S.editing === "headline";
+  $("composer").hidden = !typing;
+  $("text").placeholder = S.editing === "headline" ? "Small line / BIG LINE  (e.g. You won't believe / This SSD)" : "Caption, transcript, game, event, offer…";
+  live();
+  remember();
+}
+
+function designName(id) { return (S.designs.find((d) => d.id === id) || { name: id }).name; }
+
+function designCards() {
+  const rec = S.cover.recommended || [];
+  const ids = [...rec, ...S.designs.map((d) => d.id).filter((id) => !rec.includes(id))];
+  return `<div class="chips"><button class="chip primary" data-design="${rec[0] || S.cover.spec.design}">You choose</button></div><div class="cards">`
+    + ids.map((id) => {
+      const d = S.designs.find((x) => x.id === id) || { name: id, blurb: "" };
+      const img = S.previews && S.previews[id] ? `<img src="${S.previews[id]}" alt="${esc(d.name)}" loading="lazy">` : `<div class="ph"></div>`;
+      return `<button class="card ${S.cover.spec.design === id ? "on" : ""}" data-design="${id}" title="${esc(d.blurb)} (from ${esc(d.from)})">${img}<span>${esc(d.name)}${rec.includes(id) ? "<em>Recommended</em>" : ""}</span></button>`;
+    }).join("") + `</div>`;
+}
+
+const dots = (cols) => `<span class="dots">${["bg", "big", "highlight"].map((k) => cols[k] ? `<i style="background:${cols[k]}"></i>` : "").join("")}</span>`;
+function colourChips() {
+  const lk = S.cover.look || {}, p = S.palettes || { presets: [], roles: {} };
+  const game = lk.bg || lk.accent ? `<button class="chip" data-colours="game" data-label="Game colours">${dots({ bg: lk.bg, big: lk.accent })}Game colours</button>` : "";
+  const custom = S.editing === "colours" ? `<div class="roles">${Object.entries(p.roles).map(([k, label]) =>
+    `<label><input type="color" data-role="${k}" value="${(S.cover.spec.colors || {})[k] || "#808080"}">${esc(label)}</label>`).join("")}</div>
+    <div class="chips"><button class="chip primary" data-custom-done="1">Done</button></div>` : "";
+  return `<div class="chips">${game}<button class="chip" data-colours="design" data-label="The design's own">The design's own</button>`
+    + p.presets.map((x) => `<button class="chip" data-colours="${x.id}" data-label="${esc(x.label)}">${dots(x.colors)}${esc(x.label)}</button>`).join("")
+    + `<button class="chip" data-custom="1">Custom…</button></div>${custom}`;
+}
+
+function headlineCards() {
+  const c = S.cover;
+  if (!c.headlines.length)  // a cover made before there were three options: its own words, and writing new ones
+    return `<div class="heads"><button class="head on" data-keep-words="1"><small>${esc(c.spec.line1)}</small><b>${esc(c.spec.line2)}</b></button></div>`
+      + `<div class="chips"><button class="chip" data-own="1">Write my own</button></div>`;
+  return `<div class="heads">` + c.headlines.map((h, i) => `<button class="head ${c.headline === i ? "on" : ""}" data-headline="${i}">
+      <small>${esc(h.line1)}</small><b>${esc(h.line2)}</b><small>${h.pill_left || h.pill_right ? esc([h.pill_left, h.pill_right].filter(Boolean).join(" | ")) + " · " : ""}${esc(h.why)}</small></button>`).join("")
+    + `</div><div class="chips"><button class="chip" data-own="1">Write my own</button></div>`;
+}
+
+function readyMessage() {
+  const c = S.cover, bad = Object.values(c.checks || {}).flat().filter((k) => !k.ok);
+  return `Your cover is ready, in two versions: with the subject cut out and without.`
+    + (bad.length ? `<br><span class="warn">${[...new Set(bad.map((k) => k.detail))].map(esc).join(" ")}</span>` : `<br><span class="ok">✓ All checks pass</span>`)
+    + `<div class="chips"><a class="chip" href="${c.images.cut}&download=1">Download with cut-out</a><a class="chip" href="${c.images.plain}&download=1">Download without</a></div>`
+    + `<div class="chips"><button class="chip" data-goto="design">Change design</button><button class="chip" data-goto="colours">Change colours</button>`
+    + `<button class="chip" data-goto="headline">Change headline</button><button class="chip" data-restart="1">New cover</button></div>`;
+}
+
+// --- the live cover --------------------------------------------------------------------------------
+
+function live() {
+  const c = S.cover;
+  $("t_cut").classList.toggle("on", S.view === "cut");
+  $("t_plain").classList.toggle("on", S.view === "plain");
+  if (!c || !c.images) {
+    const working = c && (c.status === "queued" || c.status === "running");
+    $("shot").innerHTML = S.frameUrl ? `<img src="${S.frameUrl}" alt="Your frame">${working ? `<div class="busy"><span><span class="spin"></span>Working…</span></div>` : ""}`
+      : `<div class="empty">Your cover shows up here, and changes as you answer.</div>`;
+    $("dl").hidden = true;
+  } else {
+    $("shot").innerHTML = `<img src="${c.images[S.view]}" alt="Your cover">${S.busy ? `<div class="busy"><span class="spin"></span></div>` : ""}`;
+    $("dl").hidden = false;
+    $("dl").href = c.images[S.view] + "&download=1";
+  }
+  if (!c) { $("checks").innerHTML = $("budget").innerHTML = $("costs").innerHTML = ""; return; }
+  const checks = (c.checks || {})[S.view] || [];
+  $("checks").innerHTML = checks.map((k) => `<div class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "!"} ${esc(k.detail)}</div>`).join("");
   const pct = Math.min(100, c.used_usd / c.budget_usd * 100);
-  $("budget").innerHTML = `<div class="small" style="display:flex;justify-content:space-between"><span>Budget used</span>`
-    + `<span>${usd(c.used_usd)} of ${usd(c.budget_usd)} (${pct > 0 && pct < 1 ? "<1" : pct.toFixed(0)}%)</span></div>`
+  $("budget").innerHTML = `<div style="display:flex;justify-content:space-between"><span>Budget used</span><span>${usd(c.used_usd)} of ${usd(c.budget_usd)} (${pct > 0 && pct < 1 ? "<1" : pct.toFixed(0)}%)</span></div>`
     + `<div class="bar"><div style="width:${Math.max(pct, c.used_usd > 0 ? 1 : 0)}%;background:${pct > 90 ? "var(--bad)" : "var(--accent)"}"></div></div>`;
-  $("costs").innerHTML = c.costs.map((r) => `<tr><td>${r.step === "look" ? "Look" : "Write"}: ${r.model}${r.ok < r.calls ? ` <span class="bad">(${r.calls - r.ok} failed)</span>` : ""}</td><td>${usd(r.usd)}</td></tr>`).join("")
-    + `<tr><td>Read + draw: code</td><td>free</td></tr><tr><td><b>Total</b></td><td><b>${usd(c.used_usd)}</b></td></tr>`;
-  const s = c.spec;
-  for (const k of ["line1", "line2", "highlight", "pill_left", "pill_right"]) if (document.activeElement !== $(k)) $(k).value = s[k] || "";
-  for (const k of ["punch_in", "arrow"]) $(k).checked = s[k];
-  $("design").value = s.design;
-  for (const k of Object.keys(palettes.roles)) {
-    const v = (s.colors || {})[k];
-    if ($("c_" + k)) { $("c_" + k).value = v || "#808080"; $("c_" + k).title = v ? v : "auto: the design's colour"; }
+  const lk = c.look || {};
+  $("costs").innerHTML = `<table>${c.costs.map((r) => `<tr><td>${r.step === "look" ? "Look" : "Write"}: ${esc(r.model)}${r.ok < r.calls ? ` <span class="bad">(${r.calls - r.ok} failed)</span>` : ""}</td><td>${usd(r.usd)}</td></tr>`).join("")}
+    <tr><td>Reading, previews, drawing: code</td><td>free</td></tr></table>`
+    + (lk.game ? `<div class="muted" style="margin-top:6px">${esc(lk.game)}${[lk.bg, lk.accent].filter(Boolean).map((h) => `<span class="sw" style="background:${h}"></span>${h}`).join("")}</div>` : "");
+}
+
+// --- answers ---------------------------------------------------------------------------------------
+
+function go(step) { S.step = step; S.editing = null; render(); if (step === "design") loadPreviews(); }
+function next(after) {
+  // after an answer: the next unanswered step, or straight back to the cover when this was a change
+  S.step = S.wasReady ? "ready" : ORDER[ORDER.indexOf(after) + 1];
+  if (S.step === "ready") S.wasReady = true;
+  S.editing = null;
+  render();
+}
+
+async function choose(changes, after, label) {
+  S.busy = true; live();
+  try {
+    S.cover = await patch(changes);
+    if (label !== undefined) S.colourLabel = label;
+  } catch (err) { alert(err.message); }
+  S.busy = false;
+  next(after);
+}
+
+async function loadPreviews() {
+  if (!S.cover || S.cover.status !== "done") return;
+  try { S.previews = await api(`/api/covers/${S.cover.id}/previews`); } catch (err) { S.previews = {}; }
+  if (S.step === "design") render();
+}
+
+function poll() {
+  clearTimeout(timer);
+  api("/api/covers/" + S.cover.id).then((c) => {
+    S.cover = c;
+    if (c.status === "queued" || c.status === "running") { timer = setTimeout(poll, 1200); render(); return; }
+    if (c.status === "done" && S.step === "working") { S.step = "design"; render(); loadPreviews(); return; }
+    render();
+  }).catch((err) => { $("log").insertAdjacentHTML("beforeend", bot(`<span class="bad">${esc(err.message)}</span>`)); });
+}
+
+async function start(context) {
+  S.context = context;
+  S.step = "working";
+  render();
+  const fd = new FormData();
+  fd.append("frame", S.file);
+  fd.append("context", context || "");
+  try {
+    S.cover = await api("/api/covers", { method: "POST", body: fd });
+    history.replaceState(null, "", "?id=" + S.cover.id);
+    poll();
+  } catch (err) {
+    S.step = "context";
+    render();
+    $("log").insertAdjacentHTML("beforeend", bot(`<span class="bad">${esc(err.message)}</span>`));
   }
-  $("warnings").innerHTML = (c.readability || []).map((w) => `<div>! ${w}</div>`).join("");
 }
 
-$("grid").addEventListener("change", (e) => $("pair").classList.toggle("grid34", e.target.checked));
-
-async function edit(changes) {
-  $("editError").textContent = "";
-  try { show(await api("/api/covers/" + current.id, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) })); }
-  catch (err) { $("editError").textContent = err.message; }
+function pickFile(f) {
+  if (!f) return;
+  S.file = f;
+  S.frameUrl = URL.createObjectURL(f);
+  S.step = "context";
+  render();
+  $("text").focus();
 }
-$("edit").addEventListener("submit", (e) => {
-  e.preventDefault();
-  edit(Object.fromEntries(["line1", "line2", "highlight", "pill_left", "pill_right"].map((k) => [k, $(k).value])));
+
+$("log").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-topic],[data-skip],[data-design],[data-colours],[data-custom],[data-custom-done],[data-headline],[data-own],[data-goto],[data-restart],[data-keep],[data-keep-words],#drop");
+  if (!t) return;
+  if (t.id === "drop") return $("file").click();
+  const d = t.dataset;
+  if (d.topic) { $("text").value = TOPICS[d.topic]; $("text").focus(); $("text").setSelectionRange(0, 0); }
+  else if (d.skip) start("");
+  else if (d.design) choose({ design: d.design }, "design");
+  else if (d.colours) choose({ colors: d.colours }, "colours", d.label || "The design's own");
+  else if (d.custom) { S.editing = "colours"; render(); }
+  else if (d.customDone) { S.colourLabel = "Custom"; next("colours"); }
+  else if (d.keep) next("colours");
+  else if (d.keepWords) next("headline");
+  else if (d.headline) choose({ headline: Number(d.headline) }, "headline");
+  else if (d.own) { S.editing = "headline"; render(); $("text").focus(); }
+  else if (d.goto) go(d.goto);
+  else if (d.restart) restart();
 });
-for (const k of ["punch_in", "arrow"]) $(k).addEventListener("change", (e) => edit({ [k]: e.target.checked }));
+$("log").addEventListener("change", (e) => {
+  if (e.target.id === "file") pickFile(e.target.files[0]);
+  if (e.target.dataset.role) patch({ colors: { [e.target.dataset.role]: e.target.value } }).then((c) => { S.cover = c; live(); });
+});
+$("log").addEventListener("dragover", (e) => { if (S.step === "frame") { e.preventDefault(); $("drop")?.classList.add("over"); } });
+$("log").addEventListener("drop", (e) => { if (S.step === "frame") { e.preventDefault(); pickFile(e.dataTransfer.files[0]); } });
 
-const id = new URLSearchParams(location.search).get("id");
-if (id) poll(id);
+$("composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const v = $("text").value.trim();
+  $("text").value = "";
+  if (S.editing === "headline") {
+    const [a, b] = v.includes("/") ? v.split("/").map((x) => x.trim()) : ["", v];
+    if (!b) return;
+    choose({ line1: a, line2: b }, "headline");
+  } else if (S.step === "context") start(v);
+});
+$("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("composer").requestSubmit(); } });
+
+$("t_cut").addEventListener("click", () => { S.view = "cut"; live(); });
+$("t_plain").addEventListener("click", () => { S.view = "plain"; live(); });
+$("grid").addEventListener("change", (e) => $("shot").classList.toggle("grid34", e.target.checked));
+$("restart").addEventListener("click", () => restart());
+
+function restart() {
+  clearTimeout(timer);
+  history.replaceState(null, "", location.pathname);
+  S = { ...S, step: "frame", frameUrl: null, file: null, context: null, cover: null, previews: null, colourLabel: null, editing: null, wasReady: false };
+  render();
+}
+
+// --- start ---------------------------------------------------------------------------------------------
+
+Promise.all([api("/api/designs"), api("/api/palettes")]).then(async ([ds, p]) => {
+  S.designs = ds; S.palettes = p;
+  const id = new URLSearchParams(location.search).get("id");
+  if (id) {  // reopen a cover: its conversation as far as it went
+    try {
+      S.cover = await api("/api/covers/" + id);
+      const saved = recall(id) || {};
+      S.frameUrl = S.cover.frame; S.context = S.cover.context;
+      S.colourLabel = saved.colourLabel || null;
+      S.step = S.cover.status === "done" ? (saved.step || "ready") : "working";
+      S.wasReady = saved.wasReady ?? S.step === "ready";
+      if (S.cover.status !== "done") poll();
+    } catch (err) { S.step = "frame"; }
+  }
+  render();
+  if (S.step === "design") loadPreviews();
+});
 </script>
 </body>
 </html>

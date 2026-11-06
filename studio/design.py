@@ -56,6 +56,7 @@ class Spec(BaseModel):
     rating: str | None = None  # a brand-kit label (pegi_16), drawn lower left (lower right when a head is there)
     game: str | None = None
     colors: Colors = Colors()
+    colors_from: str = "auto"  # "custom" when picked role by role (kept exactly); a preset, "game" or "design" otherwise
     punch_in: bool = True  # zoom in on the subject, and grade the colours
     arrow: bool = True  # ring and arrow on the product, when the analysis found one
     wave: bool | None = None  # None: the design's choice
@@ -496,7 +497,7 @@ def _words(spec: Spec, pal: Pal) -> tuple[Image.Image, dict, dict]:
 
 def palette_for(spec: Spec, frame: Image.Image) -> Pal:
     light = float(np.asarray(frame.convert("L").resize((64, 64))).mean()) > 118
-    return resolve(spec.colors, spec.recipe.colors, designs.wash_of(spec.recipe), light)
+    return resolve(spec.colors, spec.recipe.colors, designs.wash_of(spec.recipe), light, keep=spec.colors_from == "custom")
 
 
 def draw(spec: Spec, frame: Image.Image, faces: list[Box] = (), mask: np.ndarray | None = None, product: Box | None = None,

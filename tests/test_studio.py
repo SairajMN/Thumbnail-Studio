@@ -77,9 +77,16 @@ def test_the_arrow_is_left_out_when_every_route_crosses_a_face():
 
 
 LOOK = {"game": "WD_BLACK SN850P", "seen": "A hand holds the WD_BLACK SN850P SSD box.", "background": "#0a0a2e", "accent": "#cdfd4a",
-        "product_box": [0.4, 0.5, 0.2, 0.2], "hook": "Never delete a game again: 2TB at 7,300 MB/s"}
+        "product_box": [0.4, 0.5, 0.2, 0.2], "hook": "Never delete a game again: 2TB at 7,300 MB/s",
+        "designs": ["hand_product", "made_up_design", "spotlight_unbox"]}
 WORDS = {"template": "pedestal", "line1": "Never delete a game", "line2": "Again", "highlight": "delete", "pill_left": "Available",
          "pill_right": "Now", "name_tag": None, "arrow": True, "why": "a pain every PS5 owner has"}
+
+
+HEADLINES = {"options": [WORDS,
+                         {**WORDS, "line1": "Up to", "line2": "7,300 MB/s", "highlight": "Up", "why": "a specific number"},
+                         {**WORDS, "line1": "Is your PS5", "line2": "Out of space?", "highlight": "PS5", "pill_left": None, "pill_right": None,
+                          "arrow": False, "why": "a question"}]}
 
 
 @pytest.fixture
@@ -90,7 +97,7 @@ def fake(monkeypatch):
         seen["calls"].append((model, image))
         if model in seen["fail"]:
             raise RuntimeError("provider down")
-        return LOOK if "<frame_read_by_code>" in text else WORDS
+        return LOOK if "<frame_read_by_code>" in text else HEADLINES
 
     monkeypatch.setattr(nebius, "FAKE", reply)
     return seen
@@ -116,7 +123,11 @@ def test_frame_and_context_become_a_cover_kimi_looks_glm_writes(fake):
     assert fake["calls"] == [("kimi-k3", True), ("glm-5.3", False)]  # only the vision model gets the frame
     assert cov["look"]["hook"].startswith("Never delete") and cov["look"]["product"] == [0.4, 0.5, 0.2, 0.2]
     s = cov["spec"]
-    assert (s["line2"], s["highlight"], s["arrow"], s["design"]) == ("Again", "delete", True, "studio_pedestal")  # from the template
+    assert (s["line2"], s["highlight"], s["arrow"]) == ("Again", "delete", True)  # the first option
+    # Kimi's picks, the made-up one dropped and the list filled from what the frame holds (a product, no face)
+    assert cov["recommended"][:2] == ["hand_product", "spotlight_unbox"] and len(cov["recommended"]) == 3
+    assert s["design"] == "hand_product" and [h["line2"] for h in cov["headlines"]] == ["Again", "7,300 MB/s", "Out of space?"]
+    assert cov["headline"] == 0
     assert (s["colors"]["bg"], s["colors"]["big"], s["colors"]["highlight"]) == ("#0A0A2E", "#CDFD4A", None)  # the game's, by role
     assert [(r["step"], r["model"]) for r in cov["costs"]] == [("look", "Kimi K3"), ("write", "GLM 5.3")]
     assert cov["used_usd"] == 0 and cov["budget_usd"] == 0.15  # fake replies cost nothing
@@ -168,7 +179,7 @@ def test_the_cut_out_model_can_run_from_several_threads():
 
 def test_without_a_person_or_product_both_versions_are_the_same(fake):
     fake_look = {**LOOK, "product_box": None}
-    nebius.FAKE = lambda model, system, text, image: fake_look if "<frame_read_by_code>" in text else WORDS
+    nebius.FAKE = lambda model, system, text, image: fake_look if "<frame_read_by_code>" in text else HEADLINES
     c = TestClient(app)
     r = c.post("/api/covers", files={"frame": ("f.png", _png(_frame()), "image/png")}, data={"context": "new game"})
     cov = c.get(f"/api/covers/{r.json()['id']}").json()
@@ -244,3 +255,41 @@ def test_designs_presets_and_previews_from_the_api(fake):
     assert c.patch(f"/api/covers/{cov['id']}", json={"design": "nope"}).status_code == 422
     assert c.patch(f"/api/covers/{cov['id']}", json={"colors": "nope"}).status_code == 422
     assert c.get(f"/api/covers/{cov['id']}/previews/..%2Fcover.json").status_code == 404
+
+
+def test_the_chat_picks_a_headline_by_number_and_can_write_its_own(fake):
+    c = TestClient(app)
+    cov = _make(c)
+    e = c.patch(f"/api/covers/{cov['id']}", json={"headline": 2}).json()
+    assert (e["spec"]["line1"], e["spec"]["line2"], e["spec"]["pill_left"], e["spec"]["arrow"], e["headline"]) == ("Is your PS5", "Out of space?", None, False, 2)
+    assert e["why"] == "a question" and e["images"]["cut"] != cov["images"]["cut"]
+    e = c.patch(f"/api/covers/{cov['id']}", json={"line1": "Two terabytes", "line2": "Of games"}).json()
+    assert (e["spec"]["line2"], e["headline"]) == ("Of games", -1)  # the user's own words
+    assert c.patch(f"/api/covers/{cov['id']}", json={"headline": 7}).status_code == 422
+    assert len(fake["calls"]) == 2  # picking and writing call no model
+
+
+def test_recommendations_are_filled_from_the_frame_when_the_model_gives_none():
+    from studio import covers
+    assert covers.recommend([], [(0.4, 0.2, 0.2, 0.1)], None, {})[:3] == [r.id for r in designs.DESIGNS.values() if "person" in r.fits][:3]
+    assert all("art" in designs.DESIGNS[d].fits for d in covers.recommend(["nope"], [], None, {}))
+    assert covers.recommend(["sunset_poster", "sunset_poster"], [], None, {})[0] == "sunset_poster"
+
+
+def test_the_pill_ends_on_one_word():
+    from studio import covers
+    w = covers.Words(**{**WORDS, "pill_left": "In", "pill_right": "Stock Now"})
+    assert (covers._pill(w).pill_left, covers._pill(w).pill_right) == ("In Stock", "Now")
+    assert covers._pill(covers.Words(**WORDS)).pill_right == "Now"
+    w = covers.Words(**{**WORDS, "pill_left": "20% Off", "pill_right": "This Week"})
+    assert (covers._pill(w).pill_left, covers._pill(w).pill_right) == ("20% Off", "This Week")
+
+
+def test_a_preset_stays_readable_on_any_design_but_custom_colours_are_kept(fake):
+    c = TestClient(app)
+    cov = _make(c)
+    e = c.patch(f"/api/covers/{cov['id']}", json={"design": "staff_hook", "colors": "days_of_play"}).json()
+    assert e["spec"]["colors_from"] == "days_of_play" and not e["readability"]
+    assert all(k["ok"] for k in e["checks"]["cut"] if k["id"] == "contrast"), e["checks"]["cut"]
+    e = c.patch(f"/api/covers/{cov['id']}", json={"colors": {"small": "#BFD4FF"}}).json()
+    assert e["spec"]["colors_from"] == "custom" and e["readability"]  # picked by hand: kept, and flagged
