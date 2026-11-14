@@ -2,6 +2,8 @@
 
 **Context-aware thumbnail & reel cover generator built for video editors and AI video agents.**
 
+> **Coding Agents & Repo Scanners**: Read [`AGENT.md`](AGENT.md) first for the complete architecture, module-by-module map, data contracts, invariants, and feature specifications.
+
 Give it a keyframe from your exported video plus the video's context (transcript, caption, timeline notes, game/product/offer metadata). It returns platform-ready covers (`1080×1920` Reel, `1080×1350` Feed, `1080×1080` Square, `1280×720` YouTube) styled to the content's look, with a hook written from what the video actually says.
 
 ---
