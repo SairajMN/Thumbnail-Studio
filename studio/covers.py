@@ -301,7 +301,7 @@ def draw(cid: str) -> dict:
 
 
 EDITABLE = {"design", "colors", "line1", "line2", "highlight", "subline", "pill_left", "pill_right", "name_tag", "punch_in", "arrow", "wave", "rating",
-            "offer", "qr_url", "qr_label",
+            "offer", "qr_url", "qr_label", "pan_x", "pan_y", "zoom",
             "headline"}  # headline: the index of one of the written options, whose words replace the cover's
 
 

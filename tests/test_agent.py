@@ -87,6 +87,11 @@ def test_direct_mode_generate_refine_and_export(monkeypatch, tmp_path: Path):
     updated = agent.refine(result.cover_id, edits={"line1": "DON'T MISS"})
     assert updated["spec"]["line1"] == "DON'T MISS"
 
+    panned = agent.refine(result.cover_id, edits={"pan_x": 0.25, "pan_y": -0.2, "zoom": 1.3})
+    assert panned["spec"]["pan_x"] == pytest.approx(0.25)
+    assert panned["spec"]["pan_y"] == pytest.approx(-0.2)
+    assert panned["spec"]["zoom"] == pytest.approx(1.3)
+
 
 def test_direct_mode_raises_on_failed_cover(monkeypatch):
     def fake_run(cid: str) -> None:

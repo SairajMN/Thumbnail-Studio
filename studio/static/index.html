@@ -87,6 +87,14 @@
   .gridview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
   .gridview img { width: 100%; aspect-ratio: 3/4; object-fit: cover; display: block; }
   .gridview img.mine { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .shot.pannable { cursor: grab; touch-action: none; user-select: none; }
+  .shot.panning { cursor: grabbing; }
+  .shot.pannable img { pointer-events: none; }
+  .pan-hint { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); background: rgba(15,17,21,.78); color: #fff; font-size: 11px; padding: 3px 9px; border-radius: 999px; pointer-events: none; opacity: 0; transition: opacity .15s; white-space: nowrap; }
+  .shot.pannable:hover .pan-hint, .shot.panning .pan-hint { opacity: 1; }
+  .fitbar { display: flex; gap: 6px; align-items: center; }
+  .fitbar[hidden] { display: none; }
+  .fitbar button { padding: 2px 8px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -103,6 +111,14 @@
   <aside class="live">
     <div class="tabs"><button id="t_cut" class="ghost on">With cut-out</button><button id="t_plain" class="ghost">Without cut-out</button></div>
     <div id="shot" class="shot"><div class="empty">Your cover shows up here, and changes as you answer.</div></div>
+    <div id="fitbar" class="small fitbar" hidden>
+      <span class="muted">Slide image to fit</span>
+      <span style="flex:1"></span>
+      <button id="zoomOut" class="ghost" type="button" title="Zoom out">−</button>
+      <span id="zoomVal" class="muted">100%</span>
+      <button id="zoomIn" class="ghost" type="button" title="Zoom in">+</button>
+      <button id="fitReset" class="ghost" type="button" hidden>Reset</button>
+    </div>
     <div class="small sizes"><label for="size">Size</label><select id="size">
         <option value="reel">Reel cover 9:16</option><option value="feed">Feed post 4:5</option>
         <option value="square">Square 1:1</option><option value="youtube">YouTube 16:9</option></select>
@@ -285,17 +301,25 @@ function live() {
   $("t_plain").classList.toggle("on", S.view === "plain");
   if (!c || !c.images) {
     const working = c && (c.status === "queued" || c.status === "running");
+    $("shot").classList.remove("pannable", "panning");
     $("shot").innerHTML = S.frameUrl ? `<img src="${S.frameUrl}" alt="Your frame">${working ? `<div class="busy"><span><span class="spin"></span>Working…</span></div>` : ""}`
       : `<div class="empty">Your cover shows up here, and changes as you answer.</div>`;
     $("dl").hidden = true;
+    $("fitbar").hidden = true;
   } else {
+    const canPan = S.size === "reel" && !S.withMine;
     const src = S.size === "reel" ? c.images[S.view] : `/api/covers/${c.id}/export/${S.size}.png?version=${S.view}&v=${encodeURIComponent(c.images[S.view].split("v=")[1] || "")}`;
+    $("shot").classList.toggle("pannable", canPan);
     $("shot").innerHTML = S.withMine
       ? `<div class="gridview"><img class="mine" src="${c.images[S.view]}" alt="This cover">${(S.mine || []).filter((x) => x.id !== c.id && x.status === "done").slice(0, 8).map((x) => `<img src="${x.thumb}" alt="">`).join("")}</div>`
-      : `<img src="${src}" alt="Your cover">${S.busy ? `<div class="busy"><span class="spin"></span></div>` : ""}`;
+      : `<img src="${src}" alt="Your cover">${canPan ? `<div class="pan-hint">Drag to slide &amp; fit</div>` : ""}${S.busy ? `<div class="busy"><span class="spin"></span></div>` : ""}`;
     $("dl").hidden = false;
     $("dl").href = src + (src.includes("?") ? "&" : "?") + "download=1";
     $("sizeNote").hidden = S.size === "reel";
+    $("fitbar").hidden = !canPan;
+    const sp = c.spec || {};
+    $("zoomVal").textContent = `${Math.round((sp.zoom ?? 1) * 100)}%`;
+    $("fitReset").hidden = !(sp.pan_x || sp.pan_y || (sp.zoom ?? 1) !== 1);
   }
   if (!c) { $("checks").innerHTML = $("budget").innerHTML = $("costs").innerHTML = ""; return; }
   const checks = (c.checks || {})[S.view] || [];
@@ -485,6 +509,48 @@ $("t_cut").addEventListener("click", () => { S.view = "cut"; live(); });
 $("t_plain").addEventListener("click", () => { S.view = "plain"; live(); });
 $("grid").addEventListener("change", (e) => $("shot").classList.toggle("grid34", e.target.checked));
 $("restart").addEventListener("click", () => restart());
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const round3 = (v) => Math.round(v * 1000) / 1000;
+async function applyFit(changes) {
+  if (!S.cover || S.busy) return;
+  S.busy = true; live();
+  try { S.cover = await patch(changes); } catch (err) { alert(err.message); }
+  S.busy = false; live();
+}
+$("zoomIn").addEventListener("click", () => applyFit({ zoom: round3(clamp((S.cover?.spec?.zoom ?? 1) + 0.15, 0.5, 2.5)) }));
+$("zoomOut").addEventListener("click", () => applyFit({ zoom: round3(clamp((S.cover?.spec?.zoom ?? 1) - 0.15, 0.5, 2.5)) }));
+$("fitReset").addEventListener("click", () => applyFit({ pan_x: 0, pan_y: 0, zoom: 1.0 }));
+
+let drag = null;
+$("shot").addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || !$("shot").classList.contains("pannable") || S.busy) return;
+  const sp = S.cover?.spec || {};
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, px: sp.pan_x || 0, py: sp.pan_y || 0, dx: 0, dy: 0 };
+  $("shot").setPointerCapture(e.pointerId);
+  $("shot").classList.add("panning");
+});
+$("shot").addEventListener("pointermove", (e) => {
+  if (!drag || e.pointerId !== drag.id) return;
+  drag.dx = e.clientX - drag.x;
+  drag.dy = e.clientY - drag.y;
+  const img = $("shot").querySelector("img");
+  if (img) img.style.transform = `translate(${drag.dx * 0.35}px, ${drag.dy * 0.35}px)`;
+});
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  const d = drag; drag = null;
+  $("shot").classList.remove("panning");
+  const img = $("shot").querySelector("img");
+  if (img) img.style.transform = "";
+  if (Math.hypot(d.dx, d.dy) < 3) return;
+  const rect = $("shot").getBoundingClientRect();
+  const pan_x = round3(clamp(d.px + d.dx / Math.max(rect.width * 0.45, 1), -1, 1));
+  const pan_y = round3(clamp(d.py + d.dy / Math.max(rect.height * 0.45, 1), -1, 1));
+  applyFit({ pan_x, pan_y });
+}
+$("shot").addEventListener("pointerup", endDrag);
+$("shot").addEventListener("pointercancel", endDrag);
 
 function restart() {
   clearTimeout(timer);

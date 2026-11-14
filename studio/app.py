@@ -30,6 +30,9 @@ class EditIn(BaseModel):
     offer: str | None = None
     qr_url: str | None = None
     qr_label: str | None = None
+    pan_x: float | None = None
+    pan_y: float | None = None
+    zoom: float | None = None
 
 
 def _err(e: covers.CoverError) -> HTTPException:

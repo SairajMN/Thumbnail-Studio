@@ -65,6 +65,9 @@ class Spec(BaseModel):
     offer: str | None = Field(None, max_length=24)  # a price or offer from the context ("20% OFF"), shown as a tag on the Offer design
     qr_url: str | None = Field(None, pattern=r"^https?://\S{3,300}$")  # a link shown as a QR code card, on any design
     qr_label: str = Field("SCAN ME", max_length=20)
+    pan_x: float = Field(0.0, ge=-1.0, le=1.0)
+    pan_y: float = Field(0.0, ge=-1.0, le=1.0)
+    zoom: float = Field(1.0, ge=0.5, le=2.5)
 
     @model_validator(mode="before")
     @classmethod
@@ -239,6 +242,7 @@ def _ellipse_k(n: int) -> np.ndarray:
 
 
 def _card(src: Image.Image, bottom: int, heads_src: list[PxBox], focus: tuple[float, float], panel: bool = False,
+          pan: tuple[float, float] = (0.0, 0.0), zoom: float = 1.0,
           ) -> tuple[Image.Image, tuple[int, int], list[PxBox]]:
     """The frame in a white-bordered card tilted 4° (or, as a `panel`, straight with rounded corners and no border),
     placed under the headline: the card, where it goes, and the heads in canvas pixels."""
@@ -248,10 +252,11 @@ def _card(src: Image.Image, bottom: int, heads_src: list[PxBox], focus: tuple[fl
     pad, angle = (0, 0.0) if panel else (18, 4.0)
     iw, ih = cw - 2 * pad, ch - 2 * pad
     pw, ph = src.size
-    sc = max(iw / pw, ih / ph)
-    cx0 = min(max(0, focus[0] * sc - iw / 2), pw * sc - iw)
-    cy0 = min(max(0, focus[1] * sc - ih / 2), ph * sc - ih)
-    if heads_src:  # never crop through a head: the topmost one starts inside the card
+    sc = max(iw / pw, ih / ph) * max(1.0, zoom)
+    max_cx, max_cy = max(0.0, pw * sc - iw), max(0.0, ph * sc - ih)
+    cx0 = min(max(0.0, focus[0] * sc - iw / 2 - pan[0] * max(max_cx * 0.5, iw * 0.25)), max_cx)
+    cy0 = min(max(0.0, focus[1] * sc - ih / 2 - pan[1] * max(max_cy * 0.5, ih * 0.25)), max_cy)
+    if heads_src and pan == (0.0, 0.0):  # never crop through a head unless the user manually panned
         cy0 = max(0, min(cy0, min(y for _, y, _, _ in heads_src) * sc - 20))
     inner = src.resize((round(pw * sc), round(ph * sc)), Image.LANCZOS).crop((round(cx0), round(cy0), round(cx0) + iw, round(cy0) + ih))
     card = Image.new("RGBA", (cw, ch), (255, 255, 255, 255))
@@ -372,7 +377,8 @@ def picture(spec: Spec, pal: Pal, frame: Image.Image, bottom: int, faces: list[B
         focus = ((subject[0] + subject[2] / 2) / pw, (subject[1] + subject[3] / 2) / ph) if subject else (0.5, 0.5)
         back = designs.decorate(back, recipe, pal, seed=7)
         img = Image.fromarray(np.clip(back, 0, 255).astype(np.uint8)).convert("RGBA")
-        card, (x0, y0), heads = _card(graded, bottom, heads_src, (focus[0] * pw, focus[1] * ph), panel=mode == "panel")
+        card, (x0, y0), heads = _card(graded, bottom, heads_src, (focus[0] * pw, focus[1] * ph), panel=mode == "panel",
+                                      pan=(spec.pan_x, spec.pan_y), zoom=spec.zoom)
         shadow = card.getchannel("A").filter(ImageFilter.GaussianBlur(22)).point(lambda v: int(v * 0.45))
         img.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", card.size, (0, 0, 0)).split(), shadow)), (x0 + 10, y0 + 18))
         img.alpha_composite(card, (x0, y0))
@@ -383,6 +389,12 @@ def picture(spec: Spec, pal: Pal, frame: Image.Image, bottom: int, faces: list[B
     s, ox, oy = transform(pw, ph, bottom, heads_src, subject, spec.punch_in, prod_src or None,
                           fill=0.62 if pedestal else 0.72 if recipe.badge else 0.85,  # room for the podium, or the price tag
                           max_bottom=H * 0.78 if pedestal else None, edge_off=mode not in CUT_MODES)
+    if spec.zoom != 1.0:
+        ox = W / 2 - (W / 2 - ox) * spec.zoom
+        oy = H / 2 - (H / 2 - oy) * spec.zoom
+        s *= spec.zoom
+    ox += spec.pan_x * W * 0.45
+    oy += spec.pan_y * H * 0.45
     sharp = _warp(np.asarray(graded, np.float32), s, ox, oy)
     valid = _warp(np.ones((ph, pw), np.float32), s, ox, oy, cv2.INTER_LINEAR)
     sub_c = subject and (subject[0] * s + ox, subject[1] * s + oy, subject[2] * s, subject[3] * s)
