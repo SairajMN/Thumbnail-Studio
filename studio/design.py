@@ -405,17 +405,27 @@ def picture(spec: Spec, pal: Pal, frame: Image.Image, bottom: int, faces: list[B
                               min(max(sub_c[2] * 1.35, 380), W * 0.92))
     if mode in CUT_MODES:
         m = _warp(mask, s, ox, oy, cv2.INTER_LINEAR) * valid
-        solid = cv2.morphologyEx((m > 0.5).astype(np.uint8), cv2.MORPH_OPEN, _ellipse_k(7))
-        alpha = cv2.GaussianBlur(solid.astype(np.float32), (0, 0), 1.6)[..., None]
+        solid = cv2.morphologyEx((m > 0.5).astype(np.uint8), cv2.MORPH_OPEN, _ellipse_k(9))
+        solid = cv2.morphologyEx(solid, cv2.MORPH_CLOSE, _ellipse_k(11))
+        n_cc, cc_labels, cc_stats, _ = cv2.connectedComponentsWithStats(solid, connectivity=8)
+        if n_cc > 1:
+            areas = cc_stats[1:, cv2.CC_STAT_AREA]
+            keep_min = max(900, int(areas.max() * 0.05))
+            cleaned = np.zeros_like(solid)
+            for idx, area in enumerate(areas, start=1):
+                if area >= keep_min:
+                    cleaned[cc_labels == idx] = 1
+            solid = cleaned
+        alpha = cv2.GaussianBlur(solid.astype(np.float32), (0, 0), 1.8)[..., None]
         if mode == "silhouette":  # near-black figure with a thin rim of light
             rim = cv2.GaussianBlur(cv2.dilate(solid, _ellipse_k(17)).astype(np.float32), (0, 0), 8)[..., None]
             base = back * (1 - 0.7 * rim) + np.float32(rgb(pal.glow)) * 0.7 * rim
             base = base * (1 - alpha) + np.float32((12, 12, 14)) * alpha
         else:
-            out = cv2.dilate(solid, _ellipse_k(29 if mode == "cutout" else 15)).astype(np.float32)
+            out = cv2.GaussianBlur(cv2.dilate(solid, _ellipse_k(29 if mode == "cutout" else 15)).astype(np.float32), (0, 0), 2.0)[..., None]
             glow = cv2.GaussianBlur(cv2.dilate(solid, _ellipse_k(61)).astype(np.float32), (0, 0), 22)[..., None] * (0.85 if mode == "cutout" else 0.4)
             base = back * (1 - glow) + np.float32(rgb(pal.glow)) * glow
-            base = np.where(out[..., None] > 0.5, np.float32(rgb(WHITE)), base)
+            base = base * (1 - out) + np.float32(rgb(WHITE)) * out
             base = base * (1 - alpha) + sharp * alpha
     else:  # the frame itself over the background, its edges feathered
         v = cv2.GaussianBlur(cv2.erode(valid, np.ones((25, 25), np.uint8)), (0, 0), 12)[..., None]

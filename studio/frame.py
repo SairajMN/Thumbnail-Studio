@@ -36,6 +36,23 @@ def _segmenter() -> cv2.dnn.Net:
     return cv2.dnn.readNetFromONNX(str(MODELS / "u2netp.onnx"))
 
 
+def _clean_mask(m: np.ndarray) -> np.ndarray:
+    """Remove disconnected background islands and thin bridges while preserving soft subject edges."""
+    b = cv2.morphologyEx((m > 0.45).astype(np.uint8), cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(b, connectivity=8)
+    if n > 1:
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        keep_min = max(40, int(areas.max() * 0.08))
+        keep = np.zeros_like(b)
+        for idx, area in enumerate(areas, start=1):
+            if area >= keep_min:
+                keep[labels == idx] = 1
+        b = keep
+    b = cv2.morphologyEx(b, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+    support = np.clip(cv2.GaussianBlur(b.astype(np.float32), (0, 0), 2.5) * 1.4, 0.0, 1.0)
+    return np.clip(m * support, 0.0, 1.0).astype(np.float32)
+
+
 def subject_mask(img: Image.Image) -> np.ndarray:
     """The frame's main subject (people with what they hold, or a product) as a 0-1 mask at the frame's size."""
     pic = img.convert("RGB")
@@ -44,8 +61,8 @@ def subject_mask(img: Image.Image) -> np.ndarray:
         net = _segmenter()
         net.setInput(a.transpose(2, 0, 1)[None].astype(np.float32))
         m = net.forward()[0, 0].copy()
-    m = (m - m.min()) / (m.max() - m.min() + 1e-6)
-    return cv2.resize(m.astype(np.float32), pic.size, interpolation=cv2.INTER_LINEAR)
+    m = _clean_mask((m - m.min()) / (m.max() - m.min() + 1e-6))
+    return cv2.resize(m, pic.size, interpolation=cv2.INTER_LINEAR)
 
 
 def palette(img: Image.Image, k: int = 5) -> list[tuple[str, float]]:
