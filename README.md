@@ -73,6 +73,14 @@ Open `http://127.0.0.1:8300`:
 - **UI**: Hovering the Reel preview enables `grab`/`grabbing` pointer drag (`studio/static/index.html`). Releasing the cursor sends `PATCH /api/covers/{id}` with normalized `pan_x`, `pan_y` (`-1.0` to `1.0`) and `zoom` (`0.5` to `2.5`).
 - **Renderer (`studio/design.py`)**: Both `_card()` (panel/card layouts) and full-frame `draw()` transforms apply `pan_x`, `pan_y`, and `zoom` deterministically across both `cut` and `plain` outputs.
 
+### Reference-Image Style Transfer in Chat (`"make it like that"`)
+
+- **UI (`studio/static/index.html`)**: Click the **`+`** button next to the chat input, **drag and drop** an image onto the chat area, or **paste** (`Ctrl/Cmd+V`) a reference thumbnail directly into the chat box, then send `"make it like that"` (or any style instruction).
+- **Backend (`studio/chat.py`, `studio/app.py`)**:
+  - `POST /api/covers/{id}/chat` accepts both `application/json` (`{"message": "..."}`) and `multipart/form-data` (`message`, `image`).
+  - Uploaded reference images are validated and persisted under `data/covers/<id>/refs/ref-*.png` (served via `GET /api/covers/{id}/ref/{name}`).
+  - When a reference image is attached, `chat.say()` routes through `VISION_EDIT_MODELS` (`kimi-k3` → `kimi-k2.6` → `qwen3.8-27b`) with `VISION_SYSTEM` under the cover's `budget_usd`, mapping the reference look into `Plan` (`design`, `colors`, `pill_left`/`pill_right`, `punch_in`, `arrow`, `wave`) while keeping the user's own topic and frame.
+
 ---
 
 ## Developer & Codex Integration (`agent.py`)
@@ -166,7 +174,8 @@ uv run python agent.py \
 | `POST /api/covers` | Form (`frame`, `context`) — starts async cover generation; returns cover state (`queued`). |
 | `GET /api/covers/{id}` | Poll until `status` is `"done"` or `"failed"`. |
 | `PATCH /api/covers/{id}` | Free code-only redraw with any of `design`, `headline`, `colors`, `subline`, `line1`, `line2`, `highlight`, `pill_left`, `pill_right`, `name_tag`, `punch_in`, `arrow`, `wave`, `offer`, `qr_url`, `qr_label`, `pan_x`, `pan_y`, `zoom`. |
-| `POST /api/covers/{id}/chat` | Natural-language edit (`{"message": "..."}`). |
+| `POST /api/covers/{id}/chat` | Natural-language edit (`{"message": "..."}`) or reference-image style transfer (`multipart/form-data` with `message` + `image`). |
+| `GET /api/covers/{id}/ref/{name}` | Serves a reference image (`ref-*.png`) attached in chat. |
 | `POST /api/covers/{id}/undo` | Revert the last spec edit. |
 | `POST /api/covers/{id}/images` | Upload up to 3 extra images for a `collage`. |
 | `GET /api/covers/{id}/{name}.png` | `name` is `cut`, `plain`, or `frame` (`?download=1` to download). |
