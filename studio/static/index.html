@@ -177,17 +177,11 @@ function render() {
       const lk = c.look || {};
       out.push(bot((lk.game ? `I see <b>${esc(lk.game)}</b>. ` : "I don't see a game I'm sure of. ") + esc(lk.seen)
         + (lk.hook ? `<br><span class="muted">The hook:</span> “${esc(lk.hook)}”` : "")));
-      out.push(bot("Pick a design. Each one is your frame already; the first three suit it best." + (S.step === "design" ? designCards() : "")));
-      if (past("design")) out.push(me("Design: " + esc(designName(c.spec.design)), "design"));
-      if (past("design")) out.push(bot("Which colours?" + (S.step === "colours" ? colourChips() : "")));
-      if (past("colours")) {
-        out.push(me("Colours: " + esc(S.colourLabel || "as they are"), "colours"));
-        if ((c.readability || []).length) out.push(bot(`<span class="warn">${c.readability.map(esc).join(" ")}</span>`
-          + `<div class="chips"><button class="chip" data-colours="design">Let the design pick readable colours</button><button class="chip" data-keep="1">Keep mine</button></div>`));
-      }
-      if (past("colours")) out.push(bot((c.headlines.length ? `Pick a headline. I wrote ${c.headlines.length}, each on a different hook.` : "Keep this headline, or write your own.")
-        + (S.step === "headline" ? headlineCards() : "")));
-      if (past("headline")) out.push(me(`${esc(c.spec.line1)} <b>${esc(c.spec.line2)}</b>`, "headline"));
+      if (S.step === "design") out.push(bot("Pick a design. Each one is your frame already; the first three suit it best." + designCards()));
+      if (S.step === "colours") out.push(bot("Which colours?" + colourChips()));
+      if (S.step === "headline") out.push(bot((c.headlines.length ? `Pick a headline. I wrote ${c.headlines.length}, each on a different hook.` : "Keep this headline, or write your own.") + headlineCards()));
+      if ((c.readability || []).length && S.step === "ready") out.push(bot(`<span class="warn">${c.readability.map(esc).join(" ")}</span>`
+        + `<div class="chips"><button class="chip" data-colours="design">Let the design pick readable colours</button><button class="chip" data-keep="1">Keep mine</button></div>`));
       if (S.step === "ready") {
         out.push(bot(readyMessage()));
         if (c.spec.design === "collage" && !c.extras) out.push(bot(`A collage shows your frame and up to 3 more images. Add them here:
@@ -220,7 +214,8 @@ function quick() {  // the free one-tap edits, shown once the cover is ready
   if (!ready) return;
   const sp = c.spec, pill = sp.pill_left || sp.pill_right;
   const b = (say, label) => `<button class="chip" data-say="${say}">${label}</button>`;
-  $("quick").innerHTML = b("another design", "Another design") + b("other colours", "Other colours")
+  $("quick").innerHTML = `<button class="chip" data-goto-design="1">All 18 formats</button>`
+    + b("another design", "Another design") + b("other colours", "Other colours")
     + (c.look?.product ? b(sp.arrow ? "remove the arrow" : "add the arrow", sp.arrow ? "Remove arrow" : "Add arrow") : "")
     + b(sp.punch_in ? "zoom out" : "zoom in", sp.punch_in ? "Zoom out" : "Zoom in")
     + (pill ? b("remove the pill", "Remove pill") : "")
@@ -278,7 +273,7 @@ function readyMessage() {
   return `Your cover is ready, in two versions: with the subject cut out and without.`
     + (bad.length ? `<br><span class="warn">${[...new Set(bad.map((k) => k.detail))].map(esc).join(" ")}</span>` : `<br><span class="ok">✓ All checks pass</span>`)
     + `<div class="chips"><a class="chip" href="${c.images.cut}&download=1">Download with cut-out</a><a class="chip" href="${c.images.plain}&download=1">Download without</a></div>`
-    + `<div class="chips"><button class="chip" data-goto="design">Change design</button><button class="chip" data-goto="colours">Change colours</button>`
+    + `<div class="chips"><button class="chip" data-goto="design">All 18 formats</button><button class="chip" data-goto="colours">Change colours</button>`
     + `<button class="chip" data-goto="headline">Change headline</button><button class="chip" data-restart="1">New cover</button></div>`;
 }
 
@@ -346,7 +341,7 @@ function poll() {
   api("/api/covers/" + S.cover.id).then((c) => {
     S.cover = c;
     if (c.status === "queued" || c.status === "running") { timer = setTimeout(poll, 1200); render(); return; }
-    if (c.status === "done" && S.step === "working") { S.step = "design"; render(); loadPreviews(); return; }
+    if (c.status === "done" && S.step === "working") { S.step = "ready"; S.wasReady = true; render(); return; }
     render();
   }).catch((err) => { $("log").insertAdjacentHTML("beforeend", bot(`<span class="bad">${esc(err.message)}</span>`)); });
 }
@@ -409,8 +404,9 @@ $("log").addEventListener("dragover", (e) => { if (S.step === "frame") { e.preve
 $("log").addEventListener("drop", (e) => { if (S.step === "frame") { e.preventDefault(); pickFile(e.dataTransfer.files[0]); } });
 
 $("quick").addEventListener("click", (e) => {
-  const t = e.target.closest("[data-say],[data-add-images],[data-clear-images],[data-ask-qr]");
+  const t = e.target.closest("[data-goto-design],[data-say],[data-add-images],[data-clear-images],[data-ask-qr]");
   if (!t) return;
+  if (t.dataset.gotoDesign) return go("design");
   if (t.dataset.say) say(t.dataset.say);
   if (t.dataset.addImages) { const i = document.createElement("input"); i.type = "file"; i.multiple = true; i.accept = "image/png,image/jpeg,image/webp"; i.onchange = () => addImages(i.files); i.click(); }
   if (t.dataset.clearImages) api(`/api/covers/${S.cover.id}/images`, { method: "DELETE" }).then((c) => { S.cover = c; render(); });
@@ -437,6 +433,10 @@ $("withMine").addEventListener("change", async (e) => {
 
 async function say(message) {  // a typed or one-tap edit, answered in the chat
   if (S.thinking) return;
+  if (/\b(more|all|other|show|see|pick|choose)\b.*\b(options?|designs?|formats?|thumbnails?|layouts?)\b/i.test(message)) {
+    go("design");
+    return;
+  }
   S.thinking = true;
   S.cover = { ...S.cover, messages: [...(S.cover.messages || []), { role: "user", text: message }] };
   render();
