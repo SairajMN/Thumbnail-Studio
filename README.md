@@ -1,43 +1,178 @@
 # Thumbnail Studio
 
-Reel covers that make people watch. Give it the frame you picked and what the video is about; it gives back a
-1080×1920 cover in the game's own look, with a hook built on the video's content.
+**Context-aware thumbnail & reel cover generator built for video editors and AI video agents.**
 
-## How a cover is made
+Give it a keyframe from your exported video plus the video's context (transcript, caption, timeline notes, game/product/offer metadata). It returns platform-ready covers (`1080×1920` Reel, `1080×1350` Feed, `1080×1080` Square, `1280×720` YouTube) styled to the content's look, with a hook written from what the video actually says.
 
-| Step | Who | Cost |
-|---|---|---|
-| Read the frame: faces, the subject's cut-out, main colours, on-screen text | code (YuNet, U²-Net-p, Tesseract) | free |
-| Look: which game, its colours, where the product is, the most curious moment in the video | **Kimi K3** on Nebius (sees the frame) | ~$0.007 |
-| Write: setup line with one highlighted word, punch line, pill, whether to point at the product | **GLM 5.3** on Nebius | ~$0.002 |
-| Draw: punch-in and grade, subject pop (outline and glow), ring and arrow on the product, headline, PEGI label; then checks | code | free |
+---
 
-Every model call is checked against the budget (`BUDGET_USD`, $0.15) **before** it is made, at its worst case, so a
-cover never costs more. Fallbacks stay on Nebius: looking goes Kimi K2.6, Qwen 3.8 27B, then GLM given only what code
-read; writing goes GLM 5.2, 5.1, 5.3 Flash. GLM 5.3 Flash is never sent the frame: Nebius drops its images.
+## Why This Fits After "Export" in a Video Editor
 
-Nothing is ever drawn over a face: not a word, the pill, the wash behind the words, the ring, the arrow, the PEGI
-label or the wave. Each cover is checked for that, for the profile grid's 3:4 crop, for contrast and for size.
+When a user finishes editing or generating a video and clicks **Export**, the video editor already holds rich context that standalone thumbnail tools don't have:
+- A representative **keyframe** (or up to 3 extra frames for a collage)
+- The **title, caption, transcript, and timeline notes**
+- Product, game, or promotional **offers** mentioned in the video
 
-## Run it
+`Thumbnail Studio` plugs in right after **Export** via [`agent.py`](agent.py) without modifying the core `studio/` codebase:
+
+```text
+┌────────────────────────┐      Export clicked       ┌───────────────────────────────┐
+│  Video Editor / Agent  │ ────────────────────────► │  agent.py (ThumbnailAgent)    │
+│  - Exported keyframe   │   VideoExportContext      │  - In-process (studio.covers) │
+│  - Transcript & notes  │                           │  - OR HTTP (/api/covers)      │
+│  - Title / offer       │ ◄──────────────────────── │                               │
+└────────────────────────┘   ThumbnailResult         └──────────────┬────────────────┘
+                             (PNG paths + metadata)                 │
+                                                                    ▼
+                                                     ┌───────────────────────────────┐
+                                                     │  studio/ Pipeline             │
+                                                     │  1. Read  (YuNet, U²-Net, OCR)│
+                                                     │  2. Look  (Kimi K3 vision)    │
+                                                     │  3. Write (GLM 5.3 hooks)     │
+                                                     │  4. Draw  (18 designs + QA)   │
+                                                     └───────────────────────────────┘
+```
+
+---
+
+## How a Cover Is Made
+
+| Step | Who | What Happens | Cost |
+|---|---|---|---|
+| **1. Read** | Code (`YuNet`, `U²-Net-p`, `Tesseract`) | Detects faces, cuts out the main subject, extracts dominant colours, reads on-screen text (OCR). | Free |
+| **2. Look** | **Kimi K3** on Nebius (vision) | Identifies the game/subject, signature colours, product bounding box, strongest hook, and top 3 matching designs. | ~$0.007 |
+| **3. Write** | **GLM 5.3** on Nebius | Writes 3 headline options (`line1` + `highlight` word + `line2`, optional CTA pill, offer badge, arrow toggle) grounded in `<video_context>`. | ~$0.002 |
+| **4. Draw** | Code (`Pillow` + `NumPy`) | Applies punch-in, colour grade, subject outline/glow, ring & arrow, headline, PEGI label, and runs face-safety, contrast, and 3:4 grid checks. | Free |
+
+### Budget & Fallbacks
+- Every model call is checked against `BUDGET_USD` (default `$0.15`) **before** it runs using worst-case token pricing, so a cover never exceeds its budget.
+- Vision fallbacks stay on Nebius: `kimi-k3` → `kimi-k2.6` → `qwen3.8-27b` → `glm-5.3` / `glm-5.3-flash` (text-only from code-extracted facts).
+- Writing fallbacks: `glm-5.3` → `glm-5.2` → `glm-5.1` → `glm-5.3-flash`.
+- **Face-safe layout**: Nothing is ever drawn over a detected face—not words, pills, washes, rings, arrows, PEGI labels, or waves.
+
+---
+
+## Quick Start (Users)
 
 ```bash
-brew install tesseract            # once, for on-screen text
-cp .env.example .env              # then put your Nebius key in NEBIUS_API_KEY
+brew install tesseract            # once, for on-screen text OCR
+cp .env.example .env              # add your NEBIUS_API_KEY
 uv sync
 uv run uvicorn studio.app:app --port 8300
 ```
 
-Open http://127.0.0.1:8300, choose the frame, paste the context (caption, transcript, notes; plain text or JSON) and
-make the cover. Edit the words, colours or effects afterwards: that redraws it with no model call.
+Open `http://127.0.0.1:8300`:
+1. Upload a frame and paste the video context (plain text or JSON).
+2. Review the generated `cut` (subject pop) and `plain` covers.
+3. Switch between **18 designs**, **colour presets**, **3 headline options**, or type natural-language edits in the **Chat** box (simple edits are handled in code for free; complex ones use GLM within budget).
+4. Export to **Reel** (`1080×1920`), **Feed** (`1080×1350`), **Square** (`1080×1080`), or **YouTube** (`1280×720`).
 
-## API
+---
 
-- `POST /api/covers` (form: `frame` image, `context` text) starts a cover; `GET /api/covers/{id}` until `status` is `done`
-- `PATCH /api/covers/{id}` with any of `line1`, `line2`, `highlight`, `pill_left`, `pill_right`, `name_tag`, `bg`, `accent`, `pop`, `punch_in`, `arrow`, `wave`
-- `GET /api/covers/{id}/cover.png` (`?download=1` to save it), `GET /api/options` for the models, prices and budget
+## Developer & Codex Integration (`agent.py`)
 
-Covers are kept as files in `data/covers/<id>/`.
+[`agent.py`](agent.py) is a self-contained, drop-in integration module at the repository root. Video-editor agents and coding assistants (such as Codex) can integrate it directly **without editing `studio/`**.
+
+### Option A: In-Process Python (No Server Needed)
+
+```python
+from pathlib import Path
+from agent import VideoExportContext, generate_after_export
+
+ctx = VideoExportContext(
+    frame_path=Path("exports/keyframe.png"),
+    title="Astro Bot DualSense Unboxing",
+    caption="Wait until you see the haptics on this controller!",
+    transcript="Today we unbox the limited edition Astro Bot controller...",
+    timeline_notes="00:14 hero reveal of controller box",
+    game="Astro Bot",
+    offer="₹6,499",
+    export_sizes=["reel", "youtube"],
+)
+
+result = generate_after_export(ctx)
+print(result.cover_id, result.used_usd)
+print(result.exports)  # {'reel': '.../cover-cut.png', 'youtube': '.../youtube-cut-v1.png'}
+```
+
+### Option B: HTTP Service Mode (Microservice)
+
+If Thumbnail Studio is running (`uv run uvicorn studio.app:app --port 8300`), pass `base_url` and `output_dir`:
+
+```python
+from pathlib import Path
+from agent import ThumbnailAgent, VideoExportContext
+
+agent = ThumbnailAgent(
+    base_url="http://127.0.0.1:8300",
+    output_dir=Path("exports/thumbnails"),
+)
+
+result = agent.generate_after_export(
+    VideoExportContext(
+        frame_path=Path("exports/keyframe.png"),
+        transcript="Full gameplay breakdown and launch price!",
+        preferred_design="offer",
+        export_sizes=["reel", "feed", "square", "youtube"],
+    )
+)
+
+# Optional post-generation refinement (structured edits are free; chat uses GLM if needed)
+agent.refine(result.cover_id, edits={"line1": "LIMITED DROP"})
+agent.refine(result.cover_id, message="make the background darker navy")
+```
+
+### Option C: CLI Test Hook
+
+```bash
+uv run python agent.py \
+  --frame path/to/frame.png \
+  --title "Midnight Launch Recap" \
+  --transcript "Doors opened at midnight and the line wrapped around the block." \
+  --sizes reel youtube \
+  --json
+```
+
+### `VideoExportContext` Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `frame_path` / `frame_bytes` | `Path \| None` / `bytes \| None` | Exported video keyframe (PNG, JPEG, or WebP). One is required. |
+| `title` | `str \| None` | Video title from the editor. |
+| `caption` | `str \| None` | Social post caption or description. |
+| `transcript` | `str \| None` | Speech-to-text transcript of the video. |
+| `timeline_notes` | `str \| None` | Editor markers/notes (e.g., product reveal timestamp). |
+| `game` | `str \| None` | Game or main subject name, if already known. |
+| `offer` | `str \| None` | Price or promo tag (e.g., `"20% OFF"`, `"₹4,999"`). |
+| `extra_frames` | `list[Path \| bytes]` | Up to 3 additional frames for the `collage` design. |
+| `export_sizes` | `list[str]` | Any of `"reel"`, `"feed"`, `"square"`, `"youtube"`. Default: `["reel"]`. |
+| `version` | `"cut" \| "plain"` | `"cut"` (subject pop/outline/glow) or `"plain"`. Default: `"cut"`. |
+| `preferred_design` | `str \| None` | Optional override from `studio.designs.DESIGNS`. |
+| `preferred_palette` | `str \| dict \| None` | Preset name (`"game"`, `"design"`, `"house"`, `"fc"`, etc.) or role-to-hex dict. |
+| `metadata` | `dict` | Any extra editor metadata passed into `<video_context>`. |
+
+---
+
+## HTTP API Reference
+
+| Method & Path | Purpose |
+|---|---|
+| `POST /api/covers` | Form (`frame`, `context`) — starts async cover generation; returns cover state (`queued`). |
+| `GET /api/covers/{id}` | Poll until `status` is `"done"` or `"failed"`. |
+| `PATCH /api/covers/{id}` | Free code-only redraw with any of `design`, `headline`, `colors`, `subline`, `line1`, `line2`, `highlight`, `pill_left`, `pill_right`, `name_tag`, `punch_in`, `arrow`, `wave`, `offer`, `qr_url`, `qr_label`. |
+| `POST /api/covers/{id}/chat` | Natural-language edit (`{"message": "..."}`). |
+| `POST /api/covers/{id}/undo` | Revert the last spec edit. |
+| `POST /api/covers/{id}/images` | Upload up to 3 extra images for a `collage`. |
+| `GET /api/covers/{id}/{name}.png` | `name` is `cut`, `plain`, or `frame` (`?download=1` to download). |
+| `GET /api/covers/{id}/export/{size}.png` | `size` is `reel`, `feed`, `square`, or `youtube` (`?version=cut\|plain&download=1`). |
+| `GET /api/covers/{id}/previews` | Renders thumbnails of all 18 designs for this cover (code-only, cached). |
+| `GET /api/designs` | Lists all 18 available designs and what each fits. |
+| `GET /api/palettes` | Lists colour roles, built-in presets, and user-saved palettes. |
+| `GET /api/options` | Lists configured Nebius models, pricing, and `budget_usd`. |
+
+Covers and exports are stored locally under `data/covers/<id>/`.
+
+---
 
 ## Tests
 
@@ -45,8 +180,10 @@ Covers are kept as files in `data/covers/<id>/`.
 uv run pytest
 ```
 
+---
+
 ## Credits
 
 - Face detection: [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet), OpenCV Zoo, MIT
-- Cut-out: [U²-Net-p](https://github.com/xuebinqin/U-2-Net), Apache-2.0 (the file [rembg](https://github.com/danielgatis/rembg) distributes)
+- Cut-out: [U²-Net-p](https://github.com/xuebinqin/U-2-Net), Apache-2.0 (distributed via [rembg](https://github.com/danielgatis/rembg))
 - PEGI labels and ratings: copied from Guideline Copilot's brand kit (`studio/kit`)
