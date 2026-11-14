@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -95,13 +95,35 @@ class ChatIn(BaseModel):
 
 
 @app.post("/api/covers/{cover_id}/chat")
-def chat_message(cover_id: str, body: ChatIn) -> dict:
-    """A typed edit: simple ones are done by code for free, the rest by GLM within the cover's budget. The message
-    and the reply are added to the cover's conversation."""
+async def chat_message(cover_id: str, request: Request) -> dict:
+    """A typed edit (JSON) or a typed edit with a reference image (multipart form). Simple ones are done by code
+    for free, the rest by GLM/vision within the cover's budget."""
+    ct = (request.headers.get("content-type") or "").lower()
+    ref_bytes: bytes | None = None
+    if "multipart/form-data" in ct:
+        form = await request.form()
+        message = str(form.get("message") or "")
+        up = form.get("image")
+        if up is not None and hasattr(up, "read"):
+            ref_bytes = await up.read(covers.MAX_FRAME_MB * (1 << 20) + 1)
+    else:
+        body = ChatIn.model_validate(await request.json())
+        message = body.message
     try:
-        return covers.out(chat.say(cover_id, body.message))
+        return covers.out(chat.say(cover_id, message, ref_image=ref_bytes))
     except covers.CoverError as e:
         raise _err(e) from e
+
+
+@app.get("/api/covers/{cover_id}/ref/{name}")
+def ref_image_file(cover_id: str, name: str) -> FileResponse:
+    try:
+        p = covers.folder(cover_id) / "refs" / name
+    except covers.CoverError as e:
+        raise _err(e) from e
+    if not re.fullmatch(r"ref-[0-9]+\.png", name) or not p.exists():
+        raise HTTPException(404, "not found")
+    return FileResponse(p, media_type="image/png")
 
 
 @app.post("/api/covers/{cover_id}/images")

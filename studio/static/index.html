@@ -95,6 +95,12 @@
   .fitbar { display: flex; gap: 6px; align-items: center; }
   .fitbar[hidden] { display: none; }
   .fitbar button { padding: 2px 8px; font-size: 12px; }
+  .refbar { display: flex; align-items: center; gap: 8px; padding: 6px 16px 0; font-size: 12px; color: var(--muted); }
+  .refbar[hidden] { display: none; }
+  .refbar img { height: 42px; border-radius: 6px; border: 1px solid var(--line); }
+  .msg.me img.ref { max-width: 110px; border-radius: 8px; display: block; margin-bottom: 6px; }
+  .composer.over { border-top-color: var(--accent); background: rgba(45,114,254,.08); }
+  #refPick { width: 34px; padding: 0; font-size: 20px; line-height: 1; font-weight: 500; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -103,7 +109,10 @@
     <header><b>Thumbnail Studio</b><span><button id="library" class="ghost">My covers</button> <button id="restart" class="ghost">New cover</button></span></header>
     <div id="log" class="log" aria-live="polite"></div>
     <div id="quick" class="quick" hidden></div>
+    <div id="refBar" class="refbar" hidden><img id="refImg" alt="Reference"><span>Reference image attached</span><button id="refClear" class="ghost" type="button">×</button></div>
     <form id="composer" class="composer" hidden>
+      <input id="refFile" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+      <button id="refPick" class="ghost" type="button" title="Add, paste, or drop a reference image" aria-label="Add reference image" hidden>+</button>
       <textarea id="text" rows="2"></textarea>
       <button class="send" type="submit">Send</button>
     </form>
@@ -203,7 +212,8 @@ function render() {
         if (c.spec.design === "collage" && !c.extras) out.push(bot(`A collage shows your frame and up to 3 more images. Add them here:
           <label class="drop" id="dropMore">Click to add 1–3 images<input id="moreFiles" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden></label>`));
         if (c.spec.design === "offer" && !c.spec.offer) out.push(bot("Tell me the offer for the price tag, like <b>offer 20% off</b> or <b>price ₹4,999</b>."));
-        for (const m of c.messages || []) out.push(m.role === "user" ? me(esc(m.text))
+        for (const m of c.messages || []) out.push(m.role === "user"
+          ? me((m.image ? `<img class="ref" src="${esc(m.image)}" alt="Reference">` : "") + esc(m.text))
           : bot(esc(m.text) + `<span class="via">${m.by === "code" ? "done by code, free" : `by ${esc(modelName(m.by))}, ${usd(m.usd || 0)}`}</span>`));
         if (S.thinking) out.push(bot(`<span class="spin"></span>On it…`));
       }
@@ -214,14 +224,17 @@ function render() {
   $("log").scrollTop = $("log").scrollHeight;
   const typing = S.step === "context" || S.editing === "headline" || S.step === "ready";
   $("composer").hidden = !typing;
+  $("refPick").hidden = !(S.step === "ready" && S.editing !== "headline");
+  $("refBar").hidden = !(S.refUrl && S.step === "ready" && S.editing !== "headline");
+  if (S.refUrl) $("refImg").src = S.refUrl;
   $("text").placeholder = S.editing === "headline" ? "Small line / BIG LINE  (e.g. You won't believe / This SSD)"
-    : S.step === "ready" ? "Tell me what to change, e.g. make the headline red, or say it shorter" : "Caption, transcript, game, event, offer…";
+    : S.step === "ready" ? "Tell me what to change, or paste an image & say \"make it like that\"" : "Caption, transcript, game, event, offer…";
   quick();
   live();
   remember();
 }
 
-const MODEL_NAMES = { "glm-5.3-flash": "GLM 5.3 Flash", "glm-5.3": "GLM 5.3" };
+const MODEL_NAMES = { "glm-5.3-flash": "GLM 5.3 Flash", "glm-5.3": "GLM 5.3", "kimi-k3": "Kimi K3", "kimi-k2.6": "Kimi K2.6", "qwen3.8-27b": "Qwen 3.8 27B" };
 function modelName(id) { return MODEL_NAMES[id] || id; }
 
 function quick() {  // the free one-tap edits, shown once the cover is ready
@@ -455,16 +468,30 @@ $("withMine").addEventListener("change", async (e) => {
   live();
 });
 
-async function say(message) {  // a typed or one-tap edit, answered in the chat
+async function say(message, refFile = null) {  // a typed or one-tap edit, answered in the chat
   if (S.thinking) return;
-  if (/\b(more|all|other|show|see|pick|choose)\b.*\b(options?|designs?|formats?|thumbnails?|layouts?)\b/i.test(message)) {
+  if (!refFile && /\b(more|all|other|show|see|pick|choose)\b.*\b(options?|designs?|formats?|thumbnails?|layouts?)\b/i.test(message)) {
     go("design");
     return;
   }
+  const text = (message || "").trim() || (refFile ? "Make it like this reference image." : "");
+  if (!text && !refFile) return;
   S.thinking = true;
-  S.cover = { ...S.cover, messages: [...(S.cover.messages || []), { role: "user", text: message }] };
+  const userMsg = { role: "user", text };
+  if (S.refUrl && refFile) userMsg.image = S.refUrl;
+  S.cover = { ...S.cover, messages: [...(S.cover.messages || []), userMsg] };
+  S.refFile = null; S.refUrl = null;
   render();
-  try { S.cover = await api(`/api/covers/${S.cover.id}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }) }); }
+  try {
+    if (refFile) {
+      const fd = new FormData();
+      fd.append("message", text);
+      fd.append("image", refFile);
+      S.cover = await api(`/api/covers/${S.cover.id}/chat`, { method: "POST", body: fd });
+    } else {
+      S.cover = await api(`/api/covers/${S.cover.id}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: text }) });
+    }
+  }
   catch (err) { S.cover = { ...S.cover, messages: [...S.cover.messages, { role: "bot", text: err.message, by: "code" }] }; }
   S.thinking = false;
   S.previews = null;
@@ -492,11 +519,40 @@ $("library").addEventListener("click", async () => {
   render();
 });
 
+function attachRef(file) {
+  if (!file) return;
+  S.refFile = file;
+  S.refUrl = URL.createObjectURL(file);
+  render();
+  $("text").focus();
+}
+$("refPick").addEventListener("click", () => $("refFile").click());
+$("refFile").addEventListener("change", (e) => { attachRef(e.target.files[0]); e.target.value = ""; });
+$("refClear").addEventListener("click", () => { S.refFile = null; S.refUrl = null; render(); });
+$("text").addEventListener("paste", (e) => {
+  if (S.step !== "ready" || S.editing === "headline") return;
+  const item = [...(e.clipboardData?.items || [])].find((x) => x.type.startsWith("image/"));
+  if (item) { e.preventDefault(); attachRef(item.getAsFile()); }
+});
+for (const zone of [$("composer"), $("log")]) {
+  zone.addEventListener("dragover", (e) => {
+    if (S.step === "ready" && S.editing !== "headline") { e.preventDefault(); $("composer").classList.add("over"); }
+  });
+  zone.addEventListener("dragleave", () => $("composer").classList.remove("over"));
+  zone.addEventListener("drop", (e) => {
+    if (S.step !== "ready" || S.editing === "headline") return;
+    e.preventDefault();
+    $("composer").classList.remove("over");
+    const f = [...(e.dataTransfer?.files || [])].find((x) => x.type.startsWith("image/"));
+    if (f) attachRef(f);
+  });
+}
+
 $("composer").addEventListener("submit", (e) => {
   e.preventDefault();
   const v = $("text").value.trim();
   $("text").value = "";
-  if (S.step === "ready" && S.editing !== "headline") { if (v) say(v); return; }
+  if (S.step === "ready" && S.editing !== "headline") { if (v || S.refFile) say(v, S.refFile); return; }
   if (S.editing === "headline") {
     const [a, b] = v.includes("/") ? v.split("/").map((x) => x.trim()) : ["", v];
     if (!b) return;
