@@ -521,7 +521,8 @@ def out(c: dict) -> dict:
     `cut_available` is false when there was no person or product to cut out, so both versions are the same."""
     rows: dict[tuple[str, str], dict] = {}
     for x in c["calls"]:
-        r = rows.setdefault((x["step"], x["model"]), {"step": x["step"], "model": nebius.MODELS[x["model"]]["label"], "calls": 0, "ok": 0, "usd": 0.0})
+        label = nebius.MODELS.get(x["model"], {}).get("label", x["model"])
+        r = rows.setdefault((x["step"], x["model"]), {"step": x["step"], "model": label, "calls": 0, "ok": 0, "usd": 0.0})
         r["calls"] += 1
         r["ok"] += x["ok"]
         r["usd"] = round(r["usd"] + x["usd"], 6)

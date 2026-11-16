@@ -17,7 +17,8 @@ from pathlib import Path
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from studio import covers, designs, palette
+from studio import covers, designs, imggen, palette
+from studio.config import settings
 from studio.palette import BLUE, INK, NAVY, WHITE, YELLOW
 
 EDIT_MODELS = ["glm-5.3-flash", "glm-5.3"]
@@ -187,6 +188,10 @@ def say(cid: str, message: str, ref_image: bytes | None = None) -> dict:
         if simple is not None:
             changes, reply = simple
             c = covers.undo(cid) if changes is None else covers.edit(cid, changes)
+        elif ref_path is not None and (settings.openrouter_api_key or imggen.FAKE is not None):
+            frame_bytes = (covers.folder(cid) / "frame.png").read_bytes()
+            by, cost, reply = imggen.generate_from_ref(cid, frame_bytes, ref_path.read_bytes(), message)
+            c = covers.load(cid)
         else:
             calls_before = len(c["calls"])
             ctx = {"cover": {k: c["spec"].get(k) for k in ("design", "line1", "line2", "highlight", "pill_left", "pill_right", "arrow", "punch_in")}

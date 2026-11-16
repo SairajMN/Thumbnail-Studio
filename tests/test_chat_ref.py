@@ -3,7 +3,7 @@ import io
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from studio import covers, nebius
+from studio import covers, imggen, nebius
 from studio.app import app
 from studio.design import Spec
 
@@ -88,3 +88,35 @@ def test_chat_json_still_works():
     resp = client.post(f"/api/covers/{cid}/chat", json={"message": "make the headline red"})
     assert resp.status_code == 200
     assert resp.json()["spec"]["colors"]["big"] == "#E53935"
+
+
+def test_chat_ref_uses_imggen_default_and_fallbacks(monkeypatch):
+    cid = _make_done_cover()
+    tried = []
+    out_png = _png_bytes((15, 200, 120), (540, 960))
+
+    def fake_imggen(model: str, prompt: str, frame_bytes: bytes, ref_bytes: bytes) -> tuple[bytes, float]:
+        tried.append(model)
+        if model in ("openai/gpt-image-2", "minimax/minimax-h3-image"):
+            raise RuntimeError(f"{model} failed")
+        return out_png, 0.012
+
+    monkeypatch.setattr(imggen, "FAKE", fake_imggen)
+
+    client = TestClient(app)
+    resp = client.post(
+        f"/api/covers/{cid}/chat",
+        data={"message": "make it look like this"},
+        files={"image": ("ref.png", _png_bytes((240, 240, 240)), "image/png")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert tried == ["openai/gpt-image-2", "minimax/minimax-h3-image", "openai/gpt-image-2.5-sunburst"]
+    assert body["used_usd"] == 0.012
+    assert body["messages"][-1]["by"] == "openai/gpt-image-2.5-sunburst"
+    assert "fallback" in body["messages"][-1]["text"]
+
+    cut = client.get(f"/api/covers/{cid}/cut.png")
+    assert cut.status_code == 200
+    img = Image.open(io.BytesIO(cut.content))
+    assert img.size == (1080, 1920)
