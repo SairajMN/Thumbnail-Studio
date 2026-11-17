@@ -21,7 +21,7 @@ import numpy as np
 from PIL import Image, ImageFilter
 from pydantic import BaseModel, Field
 
-from studio import design, designs, frame, kit, nebius, palette
+from studio import design, designs, frame, nebius, palette
 from studio.config import settings
 from studio.design import Spec, Template
 
@@ -286,10 +286,8 @@ def run(cid: str) -> None:
         facts, faces = frame.read(img), frame.faces(img)
         np.save(folder(cid) / "mask.npy", frame.subject_mask(img).astype(np.float16))
         update(cid, facts=facts, faces=[list(f) for f in faces], stage="look")
-        games = kit.games_in(f"{c['context']}\n{' '.join(facts['text_in_frame'])}")
         text = (f"<frame_read_by_code>\n{json.dumps(facts, ensure_ascii=False)}\n</frame_read_by_code>\n"
-                f"<video_context>\n{_context(c['context'])}\n</video_context>"
-                + (f"\nGames the store's brand kit knows in these: {', '.join(sorted(games))}." if games else ""))
+                f"<video_context>\n{_context(c['context'])}\n</video_context>")
         look, by = _ask(cid, "look", LOOK_MODELS, LOOK_SYSTEM, text, Look, LOOK_MAX, folder(cid) / "frame.png")
         colour = lambda x: x.upper() if x and HEX.match(x) else None  # noqa: E731  a malformed colour: the house one
         lk = {"game": (look.game or "").strip() or None, "seen": look.seen, "bg": colour(look.background), "accent": colour(look.accent),
@@ -308,7 +306,7 @@ def run(cid: str) -> None:
             recommended = ["offer", *recommended][:3]
             update(cid, recommended=recommended)
         spec = Spec(**words.model_dump(exclude={"why"}), design=recommended[0],
-                    rating=kit.rating_for(f"{c['context']}\n{lk['game'] or ''}"), game=lk["game"], colors=game_colors(lk))
+                    game=lk["game"], colors=game_colors(lk))
         update(cid, spec=spec.model_dump(), why=words.why, headlines=[w.model_dump() for w in options], headline=0, stage="draw")
         draw(cid)
         update(cid, status="done", stage=None)
@@ -338,14 +336,14 @@ def draw(cid: str) -> dict:
     extras = extra_images(c)
     for name, pop in VERSIONS.items():
         img, rep = design.draw(spec, frame_img, [tuple(f) for f in c["faces"]], mask,
-                               tuple(product) if product else None, kit.label_path(spec.rating), cut=pop, extras=extras)
+                               tuple(product) if product else None, cut=pop, extras=extras)
         img.save(folder(cid) / f"cover-{name}.png", optimize=True)
         checks[name] = rep["checks"]
         cut = cut or rep["cut"]
     return update(cid, checks=checks, cut_available=cut, ref_generated=False, version=c["version"] + 1)
 
 
-EDITABLE = {"design", "colors", "line1", "line2", "highlight", "subline", "pill_left", "pill_right", "name_tag", "punch_in", "arrow", "wave", "rating",
+EDITABLE = {"design", "colors", "line1", "line2", "highlight", "subline", "pill_left", "pill_right", "name_tag", "punch_in", "arrow", "wave",
             "offer", "qr_url", "qr_label", "pan_x", "pan_y", "zoom",
             "headline"}  # headline: the index of one of the written options, whose words replace the cover's
 
@@ -536,7 +534,7 @@ def previews(cid: str) -> dict[str, str]:
             return
         spec = Spec.model_validate({**c["spec"], "design": design_id})
         img, _ = design.draw(spec, src, [tuple(f) for f in c["faces"]], mask, tuple(product) if product else None,
-                             kit.label_path(spec.rating), extras=extras)
+                             extras=extras)
         img.resize((PREVIEW_W, PREVIEW_H), Image.LANCZOS).save(p, optimize=True)
 
     with ThreadPoolExecutor(4) as ex:  # OpenCV lets go of the GIL, so this is about 4x faster

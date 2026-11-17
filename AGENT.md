@@ -43,7 +43,6 @@ It also includes [`agent.py`](agent.py), a drop-in post-export integration layer
 | [`studio/palette.py`](studio/palette.py) | Colour presets (`PRESETS`), user-saved palettes (`saved`, `save`, `forget`), WCAG contrast/luminance helpers, and role resolution (`bg`, `big`, `small`, `highlight`, `pill`, `glow`). |
 | [`studio/chat.py`](studio/chat.py) | Conversational editor (`say`, `understand`, `Plan`). Handles simple edits in code for free; routes complex text edits to `EDIT_MODELS` (`glm-5.3-flash` → `glm-5.3`) and reference-image edits (`"make it like that"`) to `VISION_EDIT_MODELS` (`kimi-k3` → `kimi-k2.6` → `qwen3.8-27b`). |
 | [`studio/nebius.py`](studio/nebius.py) | Nebius Token Factory OpenAI-compatible client (`ask`), token/cost estimation (`estimate_in`, `usd`), model registry (`MODELS`), and `FAKE` test hook. |
-| [`studio/kit.py`](studio/kit.py) | Brand kit helpers (PEGI rating detection & label assets under `studio/kit/`). |
 | [`studio/config.py`](studio/config.py) | `Settings` (`nebius_api_key`, `budget_usd`, `data_dir`) loaded from `.env` / environment variables. |
 | [`studio/static/index.html`](studio/static/index.html) | Single-file chat + live preview UI (vanilla JS/CSS, no build step). |
 | [`tests/`](tests/) | `pytest` suite (`test_studio.py`, `test_agent.py`, `test_chat_ref.py`). |

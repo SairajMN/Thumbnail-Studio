@@ -44,9 +44,9 @@ SPEC = Spec(line1="You won't believe", line2="This SSD", highlight="believe", pi
 def test_a_cover_with_every_effect_keeps_words_and_marks_off_the_face():
     face = [(0.38, 0.27, 0.24, 0.12)]
     product = (0.4, 0.62, 0.2, 0.1)
-    img, rep = design.draw(SPEC, _frame(), face, _mask(), product, design.Path("studio/kit/pegi_16.jpg"))
+    img, rep = design.draw(SPEC, _frame(), face, _mask(), product)
     assert img.size == (1080, 1920)
-    assert {"ring", "arrow", "rating"} <= set(rep["boxes"]) and all(_inside(b) for b in rep["boxes"].values())
+    assert {"ring", "arrow"} <= set(rep["boxes"]) and all(_inside(b) for b in rep["boxes"].values())
     assert all(c["ok"] for c in rep["checks"]), rep["checks"]
     words_bottom = max(b[3] for k, b in rep["boxes"].items() if k.startswith(("line", "pill")))
     assert all(t >= words_bottom + design.GAP - 1 and t >= rep["wash_end"] for _, t, _, _ in rep["heads"])
@@ -208,7 +208,7 @@ def test_every_design_draws_both_versions_without_covering_a_face(design_id):
     spec = SPEC.model_copy(update={"design": design_id, "colors": palette.Colors(), "subline": "15 SEPT, 12:00 AM"})
     for faces, product in (([(0.38, 0.27, 0.24, 0.12)], (0.4, 0.62, 0.2, 0.1)), ([], (0.4, 0.5, 0.2, 0.2)), ([], None)):
         for cut in (True, False):
-            img, rep = design.draw(spec, _frame(), faces, _mask(), product, design.Path("studio/kit/pegi_16.jpg"), cut=cut)
+            img, rep = design.draw(spec, _frame(), faces, _mask(), product, cut=cut)
             assert img.size == (1080, 1920)
             bad = [c["detail"] for c in rep["checks"] if not c["ok"] and c["id"] in ("safe_zone", "face_clear", "contrast")]
             assert not bad, (design_id, cut, faces, bad)

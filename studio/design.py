@@ -55,7 +55,6 @@ class Spec(BaseModel):
     pill_left: str | None = None
     pill_right: str | None = None
     name_tag: str | None = None
-    rating: str | None = None  # a brand-kit label (pegi_16), drawn lower left (lower right when a head is there)
     game: str | None = None
     colors: Colors = Colors()
     colors_from: str = "auto"  # "custom" when picked role by role (kept exactly); a preset, "game" or "design" otherwise
@@ -656,7 +655,7 @@ def palette_for(spec: Spec, frame: Image.Image) -> Pal:
 
 
 def draw(spec: Spec, frame: Image.Image, faces: list[Box] = (), mask: np.ndarray | None = None, product: Box | None = None,
-         rating_img: Path | None = None, cut: bool = True, extras: list[tuple[Image.Image, list[Box]]] = ()) -> tuple[Image.Image, dict]:
+         cut: bool = True, extras: list[tuple[Image.Image, list[Box]]] = ()) -> tuple[Image.Image, dict]:
     """The cover and its report: the box of every word and mark, the heads, the checks, and the subject treatment
     used. `faces` and `mask` come from the frame (studio.frame); `product` is the object the video is about, as the
     look model found it. `cut` False draws the design with the frame itself instead of its cut-out. `extras`: the
@@ -690,9 +689,6 @@ def draw(spec: Spec, frame: Image.Image, faces: list[Box] = (), mask: np.ndarray
         badges.append(("offer", price_tag(spec.offer, pal.pill)))
     if spec.qr_url:
         badges.append(("qr", qr_card(spec.qr_url, spec.qr_label)))
-    if rating_img and rating_img.exists():
-        b = Image.open(rating_img).convert("RGBA")
-        badges.append(("rating", b.resize((110, round(b.height * 110 / b.width)))))
     left_out = []
     for name, img in badges:  # each in the first free place, so badges never cover a face, a mark, the words or each other
         w, h = img.size
@@ -750,7 +746,7 @@ def checks(spec: Spec, rep: dict, under: Image.Image, pal: Pal) -> list[dict]:
     long = [n for n, text, most in (("small line", spec.line1, 6), ("big line", spec.line2, 3)) if len(text.split()) > most]
     out.append({"id": "short", "ok": not long, "detail": "Headline reads at a glance." if not long
                 else f"Too many words in the {' and '.join(long)} (small line 6 at most, big line 3)."})
-    names = {"offer": "the price tag", "qr": "the QR code", "rating": "the age rating"}
+    names = {"offer": "the price tag", "qr": "the QR code"}
     if rep.get("left_out"):
         out.append({"id": "badges", "ok": False, "detail": f"No free place without covering a face or the words for {', '.join(names[n] for n in rep['left_out'])}."})
     return out
