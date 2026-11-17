@@ -74,10 +74,15 @@ It also includes [`agent.py`](agent.py), a drop-in post-export integration layer
 ### E. Reference-Image Style Transfer in Chat (`"make it like that"`)
 - Users can attach a reference image via the **`+`** button (`#refPick`), **drag-and-drop** onto `#log` / `#composer`, or **clipboard paste** (`Ctrl/Cmd+V`) into `#text`.
 - `POST /api/covers/{id}/chat` accepts `multipart/form-data` (`message` + `image`) in addition to JSON (`{"message": "..."}`).
-- `studio/chat.py:say()` saves the reference image under `data/covers/<id>/refs/ref-*.png` and calls `VISION_EDIT_MODELS` (`kimi-k3` → `kimi-k2.6` → `qwen3.8-27b`) with `VISION_SYSTEM` to map the reference image's palette, design, pill, punch-in, arrow, and wave (`Plan.wave`) onto the current cover.
+- `studio/chat.py:say()` saves the reference image under `data/covers/<id>/refs/ref-*.png`.
+- When `OPENROUTER_API_KEY` is configured (or `imggen.FAKE` is set), `studio/imggen.py:generate_from_ref()` calls OpenRouter (`/api/v1/images`) using `openai/gpt-image-2` by default and falling back to `minimax/minimax-h3-image` → `openai/gpt-image-2.5-sunburst` only if the default fails, enforcing `budget_usd` and writing the 1080×1920 output to `cover-cut.png` and `cover-plain.png`.
+- Without `OPENROUTER_API_KEY`, it uses Nebius `VISION_EDIT_MODELS` (`kimi-k3` → `kimi-k2.6` → `qwen3.8-27b`) with `VISION_SYSTEM` to map the reference image into `Plan` (`design`, `colors`, `pill`, `punch_in`, `arrow`, `wave`).
 
 ### F. Post-Export Video Editor Hook (`agent.py`)
 - Video editors call `generate_after_export(VideoExportContext(...))` right after Export to pass `frame_path`/`frame_bytes`, `title`, `caption`, `transcript`, `timeline_notes`, `game`, `offer`, and target `export_sizes` (`reel`, `feed`, `square`, `youtube`), receiving a `ThumbnailResult` with exported file paths and metadata.
+
+### G. Unified Standalone `imggen/` App (`imggen/`)
+- [`imggen/`](imggen/) is bundled in this same repository: a standalone black-and-white OpenRouter image-generation studio (`imggen/app.py`, `imggen/prompt.py`, `imggen/static/index.html`, `imggen/tests/test_app.py`) with `openai/gpt-image-2` default + `minimax/minimax-h3-image` / `openai/gpt-image-2.5-sunburst` fallbacks, model dropdown, `/api/history`, and hard `BUDGET_USD` + `MAX_CALLS` guardrails.
 
 ---
 

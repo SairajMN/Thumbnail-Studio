@@ -78,10 +78,15 @@ Open `http://127.0.0.1:8300`:
 ### Reference-Image Style Transfer in Chat (`"make it like that"`)
 
 - **UI (`studio/static/index.html`)**: Click the **`+`** button next to the chat input, **drag and drop** an image onto the chat area, or **paste** (`Ctrl/Cmd+V`) a reference thumbnail directly into the chat box, then send `"make it like that"` (or any style instruction).
-- **Backend (`studio/chat.py`, `studio/app.py`)**:
+- **Backend (`studio/chat.py`, `studio/imggen.py`, `studio/app.py`)**:
   - `POST /api/covers/{id}/chat` accepts both `application/json` (`{"message": "..."}`) and `multipart/form-data` (`message`, `image`).
   - Uploaded reference images are validated and persisted under `data/covers/<id>/refs/ref-*.png` (served via `GET /api/covers/{id}/ref/{name}`).
-  - When a reference image is attached, `chat.say()` routes through `VISION_EDIT_MODELS` (`kimi-k3` → `kimi-k2.6` → `qwen3.8-27b`) with `VISION_SYSTEM` under the cover's `budget_usd`, mapping the reference look into `Plan` (`design`, `colors`, `pill_left`/`pill_right`, `punch_in`, `arrow`, `wave`) while keeping the user's own topic and frame.
+  - When `OPENROUTER_API_KEY` is set, `chat.say()` routes reference-image requests through `studio/imggen.py` (`openai/gpt-image-2` by default, falling back to `minimax/minimax-h3-image` → `openai/gpt-image-2.5-sunburst` only on failure) with strict `budget_usd` enforcement, saving the generated 1080×1920 image directly to `cover-cut.png` and `cover-plain.png`.
+  - When only `NEBIUS_API_KEY` is set, `chat.say()` falls back to `VISION_EDIT_MODELS` (`kimi-k3` → `kimi-k2.6` → `qwen3.8-27b`) to map the reference look into `Plan` (`design`, `colors`, `pill_left`/`pill_right`, `punch_in`, `arrow`, `wave`).
+
+### Standalone `imggen/` App (OpenRouter Image Studio)
+
+This repository also includes [`imggen/`](imggen/) — a standalone black-and-white chatbot UI for direct OpenRouter image generation (`openai/gpt-image-2` default, `minimax/minimax-h3-image` and `openai/gpt-image-2.5-sunburst` fallbacks, plus a model selector, session history, strict `BUDGET_USD` + `MAX_CALLS` guardrails, and PNG download). See [`imggen/README.md`](imggen/README.md) to run it separately on port `8400`.
 
 ---
 
