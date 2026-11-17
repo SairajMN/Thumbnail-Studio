@@ -150,22 +150,6 @@ def understand(c: dict, message: str) -> tuple[dict | None, str] | None:
     return None
 
 
-def _save_ref(cid: str, data: bytes) -> tuple[Path, str]:
-    if len(data) > covers.MAX_FRAME_MB << 20:
-        raise covers.CoverError(f"the reference image is over {covers.MAX_FRAME_MB} MB", 413)
-    try:
-        img = Image.open(io.BytesIO(data))
-        img.load()
-    except Exception as e:
-        raise covers.CoverError("the reference file is not an image (PNG, JPEG or WebP)") from e
-    refs_dir = covers.folder(cid) / "refs"
-    refs_dir.mkdir(exist_ok=True)
-    name = f"ref-{len(list(refs_dir.glob('ref-*.png'))) + 1}.png"
-    path = refs_dir / name
-    img.convert("RGB").save(path)
-    return path, name
-
-
 def say(cid: str, message: str, ref_image: bytes | None = None) -> dict:
     """Apply a typed edit (with optional reference image); the message and reply are kept on the cover."""
     message = message.strip()[:500]
@@ -176,7 +160,7 @@ def say(cid: str, message: str, ref_image: bytes | None = None) -> dict:
     c = covers.load(cid)
     if c["status"] != "done":
         raise covers.CoverError("the cover is still being made", 409)
-    ref_path, ref_name = _save_ref(cid, ref_image) if ref_image is not None else (None, None)
+    ref_path, ref_name = covers.save_ref_image(cid, ref_image) if ref_image is not None else (None, None)
     user_msg = {"role": "user", "text": message, "at": _now()}
     if ref_name:
         user_msg["image"] = f"/api/covers/{cid}/ref/{ref_name}"

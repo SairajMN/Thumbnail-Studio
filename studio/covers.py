@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import re
+import shutil
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -152,7 +153,24 @@ def spent(c: dict) -> float:
 
 # --- making a cover -----------------------------------------------------------------------------
 
-def create(data: bytes, context: str) -> dict:
+def save_ref_image(cid: str, data: bytes) -> tuple[Path, str]:
+    """Validate and save a reference image under data/covers/<id>/refs/ref-N.png."""
+    if len(data) > MAX_FRAME_MB << 20:
+        raise CoverError(f"the reference image is over {MAX_FRAME_MB} MB", 413)
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+    except Exception as e:
+        raise CoverError("the reference file is not an image (PNG, JPEG or WebP)") from e
+    refs_dir = folder(cid) / "refs"
+    refs_dir.mkdir(exist_ok=True)
+    name = f"ref-{len(list(refs_dir.glob('ref-*.png'))) + 1}.png"
+    path = refs_dir / name
+    img.convert("RGB").save(path)
+    return path, name
+
+
+def create(data: bytes, context: str, ref_image: bytes | None = None) -> dict:
     if len(data) > MAX_FRAME_MB << 20:
         raise CoverError(f"the frame is over {MAX_FRAME_MB} MB", 413)
     try:
@@ -163,9 +181,18 @@ def create(data: bytes, context: str) -> dict:
     cid = uuid.uuid4().hex
     folder(cid).mkdir(parents=True)
     img.convert("RGB").save(folder(cid) / "frame.png")  # one format downstream; nothing else from the upload is kept
+    ref_url: str | None = None
+    if ref_image is not None:
+        try:
+            _, ref_name = save_ref_image(cid, ref_image)
+            ref_url = f"/api/covers/{cid}/ref/{ref_name}"
+        except Exception:
+            shutil.rmtree(folder(cid), ignore_errors=True)
+            raise
     c = {"id": cid, "created_at": datetime.now(UTC).isoformat(), "status": "queued", "stage": None, "error": None,
          "context": context.strip()[:20000], "budget_usd": settings.budget_usd, "calls": [], "facts": None, "faces": [],
          "look": None, "spec": None, "why": None, "checks": {}, "cut_available": False, "version": 0,
+         "ref_image": ref_url, "ref_generated": False,
          "history": [], "messages": [], "extras": []}
     with LOCK:
         save(c)
@@ -235,8 +262,26 @@ WORD_FIELDS = ("template", "line1", "line2", "highlight", "pill_left", "pill_rig
 def run(cid: str) -> None:
     """Make the cover (in a background thread). Any failure is stored on the cover, with what was spent."""
     try:
-        update(cid, status="running", stage="read", error=None)
         c = load(cid)
+        ref_path = folder(cid) / "refs" / "ref-1.png"
+        if c.get("ref_image") and ref_path.exists():
+            from studio import imggen
+
+            if not (settings.openrouter_api_key or imggen.FAKE is not None):
+                raise CoverError("OPENROUTER_API_KEY is not set for reference-image generation", 400)
+            update(cid, status="running", stage="generate", error=None)
+            spec = Spec(design="frame_first", line1="", line2="Cover")
+            update(cid, spec=spec.model_dump())
+            imggen.generate_from_ref(
+                cid,
+                (folder(cid) / "frame.png").read_bytes(),
+                ref_path.read_bytes(),
+                c["context"] or "Make it like this reference image.",
+                step="generate",
+            )
+            update(cid, status="done", stage=None, cut_available=False, ref_generated=True)
+            return
+        update(cid, status="running", stage="read", error=None)
         img = Image.open(folder(cid) / "frame.png")
         facts, faces = frame.read(img), frame.faces(img)
         np.save(folder(cid) / "mask.npy", frame.subject_mask(img).astype(np.float16))
@@ -297,7 +342,7 @@ def draw(cid: str) -> dict:
         img.save(folder(cid) / f"cover-{name}.png", optimize=True)
         checks[name] = rep["checks"]
         cut = cut or rep["cut"]
-    return update(cid, checks=checks, cut_available=cut, version=c["version"] + 1)
+    return update(cid, checks=checks, cut_available=cut, ref_generated=False, version=c["version"] + 1)
 
 
 EDITABLE = {"design", "colors", "line1", "line2", "highlight", "subline", "pill_left", "pill_right", "name_tag", "punch_in", "arrow", "wave", "rating",
@@ -531,7 +576,8 @@ def out(c: dict) -> dict:
         "messages": c.get("messages") or [], "can_undo": bool(c.get("history")), "extras": len(c.get("extras") or []),
         "sizes": {k: f"{w}×{h}" for k, (w, h) in SIZES.items()},
         "costs": list(rows.values()), "used_usd": spent(c),
-        "cut_available": c.get("cut_available", False), "frame": f"/api/covers/{c['id']}/frame.png",
+        "cut_available": c.get("cut_available", False), "ref_image": c.get("ref_image"),
+        "ref_generated": bool(c.get("ref_generated")), "frame": f"/api/covers/{c['id']}/frame.png",
         "images": {n: f"/api/covers/{c['id']}/{n}.png?v={c['version']}" for n in VERSIONS} if c["version"] else None,
         "readability": palette.readability(design.palette_for(Spec.model_validate(c["spec"]), Image.open(folder(c["id"]) / "frame.png")))
-        if c["spec"] else []}
+        if c["spec"] and not c.get("ref_generated") else []}

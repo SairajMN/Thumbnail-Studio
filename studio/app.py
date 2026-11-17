@@ -186,11 +186,17 @@ def preview_file(cover_id: str, name: str) -> FileResponse:
 
 
 @app.post("/api/covers", status_code=201)
-async def create_cover(tasks: BackgroundTasks, frame: UploadFile = File(...), context: str = Form("")) -> dict:
-    """Start a cover from the picked frame and what is known about the video (text or JSON)."""
+async def create_cover(
+    tasks: BackgroundTasks,
+    frame: UploadFile = File(...),
+    context: str = Form(""),
+    ref_image: UploadFile | None = File(None),
+) -> dict:
+    """Start a cover from the picked frame, video context (text or JSON), and optional reference image."""
     data = await frame.read(covers.MAX_FRAME_MB * (1 << 20) + 1)
+    ref_bytes = await ref_image.read(covers.MAX_FRAME_MB * (1 << 20) + 1) if ref_image is not None else None
     try:
-        c = covers.create(data, context)
+        c = covers.create(data, context, ref_image=ref_bytes)
     except covers.CoverError as e:
         raise _err(e) from e
     tasks.add_task(covers.run, c["id"])
