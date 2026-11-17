@@ -71,15 +71,28 @@ It also includes [`agent.py`](agent.py), a drop-in post-export integration layer
 - `_card()` (panel/card layouts) and full-frame `draw()` apply these transforms to both `cut` and `plain` outputs.
 - In `studio/static/index.html`, pointer events (`pointerdown`/`pointermove`/`pointerup`) on `#shot` let the user click, hold, and slide the image, plus `−` / `+` / `Reset` buttons in `#fitbar` trigger `PATCH /api/covers/{id}`.
 
-### E. Reference-Image Style Transfer in Chat (`"make it like that"`)
-- Users can attach a reference image via the **`+`** button (`#refPick`), **drag-and-drop** onto `#log` / `#composer`, or **clipboard paste** (`Ctrl/Cmd+V`) into `#text`.
-- `POST /api/covers/{id}/chat` accepts `multipart/form-data` (`message` + `image`) in addition to JSON (`{"message": "..."}`).
-- `studio/chat.py:say()` saves the reference image under `data/covers/<id>/refs/ref-*.png`.
-- When `OPENROUTER_API_KEY` is configured (or `imggen.FAKE` is set), `studio/imggen.py:generate_from_ref()` calls OpenRouter (`/api/v1/images`) using `openai/gpt-image-2` by default and falling back to `minimax/minimax-h3-image` → `openai/gpt-image-2.5-sunburst` only if the default fails, enforcing `budget_usd` and writing the 1080×1920 output to `cover-cut.png` and `cover-plain.png`.
-- Without `OPENROUTER_API_KEY`, it uses Nebius `VISION_EDIT_MODELS` (`kimi-k3` → `kimi-k2.6` → `qwen3.8-27b`) with `VISION_SYSTEM` to map the reference image into `Plan` (`design`, `colors`, `pill`, `punch_in`, `arrow`, `wave`).
+### E. Reference-Image Generation & Style Transfer (`"make it like that"`)
+- Users can attach a reference image **both at the start of the chat** (`context` step, alongside the frame and video context) **and in follow-up chat edits** (`ready` step) via the **`+`** button (`#refPick`), **drag-and-drop** onto `#log` / `#composer`, or **clipboard paste** (`Ctrl/Cmd+V`) into `#text`.
+- **Two generation modes**:
+  1. **Frame only (no reference image)**: Runs the normal 4-stage pipeline (`Read → Look [Kimi] → Write [GLM] → Draw [PIL]`), producing both **With cut-out** (`cover-cut.png`) and **Without cut-out** (`cover-plain.png`) versions.
+  2. **Frame + Reference image**: `POST /api/covers` accepts an optional `ref_image` file (saved to `data/covers/<id>/refs/ref-1.png`) and `covers.run()` calls `studio/imggen.py:generate_from_ref()` using OpenRouter (`/api/v1/images`) with `openai/gpt-image-2` by default and falling back to `minimax/minimax-h3-image` → `openai/gpt-image-2.5-sunburst`, enforcing `budget_usd`. The model's USD cost is recorded in `calls` (`step="generate"` / `"edit"`) and displayed in the UI's **Checks and costs** panel. Covers generated from a reference image set `ref_generated=True` and render as a **single version** (no `With cut-out` / `Without cut-out` tabs or split downloads).
+- `POST /api/covers/{id}/chat` accepts `multipart/form-data` (`message` + `image`) in addition to JSON (`{"message": "..."}`), allowing users to attach a new reference image and generate a fresh variation at any time (falling back to Nebius `VISION_EDIT_MODELS` when `OPENROUTER_API_KEY` is not set).
 
-### F. Post-Export Video Editor Hook (`agent.py`)
-- Video editors call `generate_after_export(VideoExportContext(...))` right after Export to pass `frame_path`/`frame_bytes`, `title`, `caption`, `transcript`, `timeline_notes`, `game`, `offer`, and target `export_sizes` (`reel`, `feed`, `square`, `youtube`), receiving a `ThumbnailResult` with exported file paths and metadata.
+### F. Video Editing Agent Integration & Video Context Input ([`agent.py`](agent.py))
+- **For Video Editing Agents**: Call `generate_after_export(VideoExportContext(...))` in [`agent.py`](agent.py) right after video export, or `POST /api/covers` directly with `frame` (`UploadFile`), `context` (`Form` string — plain text or JSON), and optional `ref_image` (`UploadFile`).
+- **Expected Video Context Schema** (`VideoExportContext.to_context_json()`):
+  ```json
+  {
+    "title": "Video title or working headline",
+    "caption": "Social post caption / hook",
+    "transcript": "Spoken transcript from the video",
+    "timeline_notes": "Editor timeline markers, key moments, or visual cues",
+    "game": "Game or product name (optional)",
+    "offer": "Promo/price tag e.g. '20% OFF' (optional)",
+    "metadata": {}
+  }
+  ```
+- **UI Video Context Box** ([`studio/static/index.html`](studio/static/index.html)): During the `context` step, the chat composer acts as a dedicated Video Context input box where users can paste plain video notes **or** the Video Editing Agent's JSON payload directly (with a **Paste Agent JSON** chip that pre-fills the schema above). `studio/covers.py:_context()` parses both JSON and plain text seamlessly.
 
 ### G. Unified Standalone `imggen/` App (`imggen/`)
 - [`imggen/`](imggen/) is bundled in this same repository: a standalone black-and-white OpenRouter image-generation studio (`imggen/app.py`, `imggen/prompt.py`, `imggen/static/index.html`, `imggen/tests/test_app.py`) with `openai/gpt-image-2` default + `minimax/minimax-h3-image` / `openai/gpt-image-2.5-sunburst` fallbacks, model dropdown, `/api/history`, and hard `BUDGET_USD` + `MAX_CALLS` guardrails.
