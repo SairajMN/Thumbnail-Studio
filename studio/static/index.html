@@ -146,7 +146,15 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const usd = (n) => n === 0 ? "free" : n < 0.01 ? "$" + n.toFixed(4) : "$" + n.toFixed(2);
-const STAGES = { read: "Reading the frame", look: "Kimi K3 is looking at it", write: "GLM 5.3 is writing headlines", draw: "Drawing" };
+const STAGES = { read: "Reading the frame", look: "Kimi K3 is looking at it", write: "GLM 5.3 is writing headlines", draw: "Drawing", generate: "Generating from reference" };
+const AGENT_JSON_TEMPLATE = JSON.stringify({
+  title: "",
+  caption: "",
+  transcript: "",
+  timeline_notes: "",
+  game: "",
+  offer: "",
+}, null, 2);
 const TOPICS = {
   "Launch": "Launch of [game] at our store. Available now.",
   "Unboxing": "Unboxing [product] at our store. In stock now.",
@@ -159,7 +167,7 @@ const ORDER = ["frame", "context", "working", "design", "colours", "headline", "
 
 // state: the cover from the server, plus the chat's own progress (kept per cover in this browser)
 let S = { size: "reel", withMine: false, mine: null, step: "frame", frameUrl: null, file: null, context: null, cover: null, previews: null, designs: [], palettes: null,
-          colourLabel: null, view: "cut", editing: null, warnedFor: null };
+          colourLabel: null, view: "cut", editing: null, warnedFor: null, startRefUrl: null, refFile: null, refUrl: null };
 let timer = null;
 
 async function api(path, init) {
@@ -190,18 +198,22 @@ function render() {
     + (S.step === "frame" ? `<label class="drop" id="drop">Click or drop an image here<input id="file" type="file" accept="image/png,image/jpeg,image/webp" hidden></label>` : "")));
   if (S.frameUrl) out.push(me(`<img class="thumb" src="${S.frameUrl}" alt="Your frame">`));
   if (past("frame")) {
-    out.push(bot("What's the video about? Paste the caption, transcript or a few notes, or tap one to start from."
+    out.push(bot("What's the video about? Paste the caption, transcript, notes, or Video Editing Agent JSON — or tap one to start from. You can also attach a reference image (<b>+</b> or paste) to make it like that."
       + (S.step === "context" ? `<div class="chips">${Object.keys(TOPICS).map((t) => `<button class="chip" data-topic="${t}">${t}</button>`).join("")}
+         <button class="chip" data-agent-json="1">Paste Agent JSON</button>
          <button class="chip" data-skip="1">Skip: just the frame</button></div>` : "")));
   }
-  if (past("context")) out.push(me(esc(S.context) || "<i>No notes, just the frame</i>"));
+  const startRef = c?.ref_image || S.startRefUrl;
+  if (past("context")) out.push(me((startRef ? `<img class="ref" src="${esc(startRef)}" alt="Reference">` : "") + (esc(S.context) || "<i>No notes, just the frame</i>")));
   if (past("context") && c) {
     if (c.status === "failed") out.push(bot(`<span class="bad">That didn't work: ${esc(c.error)}</span><div class="chips"><button class="chip" data-restart="1">Start again</button></div>`));
-    else if (c.status !== "done" || !c.spec) out.push(bot(`<span class="spin"></span>${STAGES[c.stage] || "Starting"}…`));
+    else if (c.status !== "done" || (!c.spec && !c.ref_generated)) out.push(bot(`<span class="spin"></span>${STAGES[c.stage] || "Starting"}…`));
     else {
-      const lk = c.look || {};
-      out.push(bot((lk.game ? `I see <b>${esc(lk.game)}</b>. ` : "I don't see a game I'm sure of. ") + esc(lk.seen)
-        + (lk.hook ? `<br><span class="muted">The hook:</span> “${esc(lk.hook)}”` : "")));
+      if (c.look) {
+        const lk = c.look;
+        out.push(bot((lk.game ? `I see <b>${esc(lk.game)}</b>. ` : "I don't see a game I'm sure of. ") + esc(lk.seen)
+          + (lk.hook ? `<br><span class="muted">The hook:</span> “${esc(lk.hook)}”` : "")));
+      }
       if (S.step === "design") out.push(bot("Pick a design. Each one is your frame already; the first three suit it best." + designCards()));
       if (S.step === "colours") out.push(bot("Which colours?" + colourChips()));
       if (S.step === "headline") out.push(bot((c.headlines.length ? `Pick a headline. I wrote ${c.headlines.length}, each on a different hook.` : "Keep this headline, or write your own.") + headlineCards()));
@@ -223,12 +235,14 @@ function render() {
   $("log").innerHTML = out.join("");
   $("log").scrollTop = $("log").scrollHeight;
   const typing = S.step === "context" || S.editing === "headline" || S.step === "ready";
+  const canRef = (S.step === "context" || S.step === "ready") && S.editing !== "headline";
   $("composer").hidden = !typing;
-  $("refPick").hidden = !(S.step === "ready" && S.editing !== "headline");
-  $("refBar").hidden = !(S.refUrl && S.step === "ready" && S.editing !== "headline");
+  $("refPick").hidden = !canRef;
+  $("refBar").hidden = !(S.refUrl && canRef);
   if (S.refUrl) $("refImg").src = S.refUrl;
   $("text").placeholder = S.editing === "headline" ? "Small line / BIG LINE  (e.g. You won't believe / This SSD)"
-    : S.step === "ready" ? "Tell me what to change, or paste an image & say \"make it like that\"" : "Caption, transcript, game, event, offer…";
+    : S.step === "ready" ? "Tell me what to change, or paste an image & say \"make it like that\""
+    : "Paste video context or Video Editing Agent JSON (title, caption, transcript, timeline_notes)… or attach a reference image (+ / paste)";
   quick();
   live();
   remember();
@@ -299,6 +313,11 @@ function headlineCards() {
 
 function readyMessage() {
   const c = S.cover, bad = Object.values(c.checks || {}).flat().filter((k) => !k.ok);
+  if (c.ref_generated) {
+    return `Your cover is ready, generated from your reference image.`
+      + `<div class="chips"><a class="chip" href="${c.images.plain}&download=1">Download</a>`
+      + `<button class="chip" data-goto="design">All 18 formats</button><button class="chip" data-restart="1">New cover</button></div>`;
+  }
   return `Your cover is ready, in two versions: with the subject cut out and without.`
     + (bad.length ? `<br><span class="warn">${[...new Set(bad.map((k) => k.detail))].map(esc).join(" ")}</span>` : `<br><span class="ok">✓ All checks pass</span>`)
     + `<div class="chips"><a class="chip" href="${c.images.cut}&download=1">Download with cut-out</a><a class="chip" href="${c.images.plain}&download=1">Download without</a></div>`
@@ -310,6 +329,8 @@ function readyMessage() {
 
 function live() {
   const c = S.cover;
+  const isRefGen = Boolean(c && c.ref_generated);
+  $("t_cut").parentElement.hidden = isRefGen;
   $("t_cut").classList.toggle("on", S.view === "cut");
   $("t_plain").classList.toggle("on", S.view === "plain");
   if (!c || !c.images) {
@@ -320,11 +341,12 @@ function live() {
     $("dl").hidden = true;
     $("fitbar").hidden = true;
   } else {
-    const canPan = S.size === "reel" && !S.withMine;
-    const src = S.size === "reel" ? c.images[S.view] : `/api/covers/${c.id}/export/${S.size}.png?version=${S.view}&v=${encodeURIComponent(c.images[S.view].split("v=")[1] || "")}`;
+    const view = isRefGen ? "plain" : S.view;
+    const canPan = !isRefGen && S.size === "reel" && !S.withMine;
+    const src = S.size === "reel" ? c.images[view] : `/api/covers/${c.id}/export/${S.size}.png?version=${view}&v=${encodeURIComponent(c.images[view].split("v=")[1] || "")}`;
     $("shot").classList.toggle("pannable", canPan);
     $("shot").innerHTML = S.withMine
-      ? `<div class="gridview"><img class="mine" src="${c.images[S.view]}" alt="This cover">${(S.mine || []).filter((x) => x.id !== c.id && x.status === "done").slice(0, 8).map((x) => `<img src="${x.thumb}" alt="">`).join("")}</div>`
+      ? `<div class="gridview"><img class="mine" src="${c.images[view]}" alt="This cover">${(S.mine || []).filter((x) => x.id !== c.id && x.status === "done").slice(0, 8).map((x) => `<img src="${x.thumb}" alt="">`).join("")}</div>`
       : `<img src="${src}" alt="Your cover">${canPan ? `<div class="pan-hint">Drag to slide &amp; fit</div>` : ""}${S.busy ? `<div class="busy"><span class="spin"></span></div>` : ""}`;
     $("dl").hidden = false;
     $("dl").href = src + (src.includes("?") ? "&" : "?") + "download=1";
@@ -335,14 +357,14 @@ function live() {
     $("fitReset").hidden = !(sp.pan_x || sp.pan_y || (sp.zoom ?? 1) !== 1);
   }
   if (!c) { $("checks").innerHTML = $("budget").innerHTML = $("costs").innerHTML = ""; return; }
-  const checks = (c.checks || {})[S.view] || [];
+  const checks = (c.checks || {})[isRefGen ? "plain" : S.view] || [];
   $("checks").innerHTML = checks.map((k) => `<div class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "!"} ${esc(k.detail)}</div>`).join("");
   const pct = Math.min(100, c.used_usd / c.budget_usd * 100);
   $("budget").innerHTML = `<div style="display:flex;justify-content:space-between"><span>Budget used</span><span>${usd(c.used_usd)} of ${usd(c.budget_usd)} (${pct > 0 && pct < 1 ? "<1" : pct.toFixed(0)}%)</span></div>`
     + `<div class="bar"><div style="width:${Math.max(pct, c.used_usd > 0 ? 1 : 0)}%;background:${pct > 90 ? "var(--bad)" : "var(--accent)"}"></div></div>`;
   const lk = c.look || {};
-  $("costs").innerHTML = `<table>${c.costs.map((r) => `<tr><td>${{ look: "Look", write: "Write", edit: "Edit" }[r.step] || r.step}: ${esc(r.model)}${r.ok < r.calls ? ` <span class="bad">(${r.calls - r.ok} failed)</span>` : ""}</td><td>${usd(r.usd)}</td></tr>`).join("")}
-    <tr><td>Reading, previews, drawing: code</td><td>free</td></tr></table>`
+  $("costs").innerHTML = `<table>${c.costs.map((r) => `<tr><td>${{ look: "Look", write: "Write", edit: "Edit", generate: "Generate" }[r.step] || r.step}: ${esc(r.model)}${r.ok < r.calls ? ` <span class="bad">(${r.calls - r.ok} failed)</span>` : ""}</td><td>${usd(r.usd)}</td></tr>`).join("")}
+    ${isRefGen ? "" : "<tr><td>Reading, previews, drawing: code</td><td>free</td></tr>"}</table>`
     + (lk.game ? `<div class="muted" style="margin-top:6px">${esc(lk.game)}${[lk.bg, lk.accent].filter(Boolean).map((h) => `<span class="sw" style="background:${h}"></span>${h}`).join("")}</div>` : "");
 }
 
@@ -383,13 +405,17 @@ function poll() {
   }).catch((err) => { $("log").insertAdjacentHTML("beforeend", bot(`<span class="bad">${esc(err.message)}</span>`)); });
 }
 
-async function start(context) {
+async function start(context, refFile = null) {
   S.context = context;
+  S.startRefUrl = refFile ? S.refUrl : null;
+  S.refFile = null;
+  S.refUrl = null;
   S.step = "working";
   render();
   const fd = new FormData();
   fd.append("frame", S.file);
   fd.append("context", context || "");
+  if (refFile) fd.append("ref_image", refFile);
   try {
     S.cover = await api("/api/covers", { method: "POST", body: fd });
     history.replaceState(null, "", "?id=" + S.cover.id);
@@ -411,7 +437,7 @@ function pickFile(f) {
 }
 
 $("log").addEventListener("click", (e) => {
-  const t = e.target.closest("#dropMore,[data-forget],[data-topic],[data-skip],[data-design],[data-colours],[data-custom],[data-custom-done],[data-save-palette],[data-headline],[data-own],[data-goto],[data-restart],[data-keep],[data-keep-words],[data-close-library],#drop");
+  const t = e.target.closest("#dropMore,[data-forget],[data-topic],[data-agent-json],[data-skip],[data-design],[data-colours],[data-custom],[data-custom-done],[data-save-palette],[data-headline],[data-own],[data-goto],[data-restart],[data-keep],[data-keep-words],[data-close-library],#drop");
   if (!t) return;
   if (t.id === "drop") return $("file").click();
   const d = t.dataset;
@@ -420,7 +446,8 @@ $("log").addEventListener("click", (e) => {
   if (d.savePalette) return savePalette();
   if (d.closeLibrary) { S.library = null; return render(); }
   if (d.topic) { $("text").value = TOPICS[d.topic]; $("text").focus(); $("text").setSelectionRange(0, 0); }
-  else if (d.skip) start("");
+  else if (d.agentJson) { $("text").value = AGENT_JSON_TEMPLATE; $("text").focus(); }
+  else if (d.skip) start("", S.refFile);
   else if (d.design) choose({ design: d.design }, "design");
   else if (d.colours) choose({ colors: d.colours }, "colours", d.label || "The design's own");
   else if (d.custom) { S.editing = "colours"; render(); }
@@ -529,18 +556,19 @@ function attachRef(file) {
 $("refPick").addEventListener("click", () => $("refFile").click());
 $("refFile").addEventListener("change", (e) => { attachRef(e.target.files[0]); e.target.value = ""; });
 $("refClear").addEventListener("click", () => { S.refFile = null; S.refUrl = null; render(); });
+const canAttachRef = () => (S.step === "context" || S.step === "ready") && S.editing !== "headline";
 $("text").addEventListener("paste", (e) => {
-  if (S.step !== "ready" || S.editing === "headline") return;
+  if (!canAttachRef()) return;
   const item = [...(e.clipboardData?.items || [])].find((x) => x.type.startsWith("image/"));
   if (item) { e.preventDefault(); attachRef(item.getAsFile()); }
 });
 for (const zone of [$("composer"), $("log")]) {
   zone.addEventListener("dragover", (e) => {
-    if (S.step === "ready" && S.editing !== "headline") { e.preventDefault(); $("composer").classList.add("over"); }
+    if (canAttachRef()) { e.preventDefault(); $("composer").classList.add("over"); }
   });
   zone.addEventListener("dragleave", () => $("composer").classList.remove("over"));
   zone.addEventListener("drop", (e) => {
-    if (S.step !== "ready" || S.editing === "headline") return;
+    if (!canAttachRef()) return;
     e.preventDefault();
     $("composer").classList.remove("over");
     const f = [...(e.dataTransfer?.files || [])].find((x) => x.type.startsWith("image/"));
@@ -557,7 +585,7 @@ $("composer").addEventListener("submit", (e) => {
     const [a, b] = v.includes("/") ? v.split("/").map((x) => x.trim()) : ["", v];
     if (!b) return;
     choose({ line1: a, line2: b }, "headline");
-  } else if (S.step === "context") start(v);
+  } else if (S.step === "context") start(v || (S.refFile ? "Make it like this reference image." : ""), S.refFile);
 });
 $("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("composer").requestSubmit(); } });
 
@@ -611,7 +639,7 @@ $("shot").addEventListener("pointercancel", endDrag);
 function restart() {
   clearTimeout(timer);
   history.replaceState(null, "", location.pathname);
-  S = { ...S, step: "frame", frameUrl: null, file: null, context: null, cover: null, previews: null, colourLabel: null, editing: null, wasReady: false };
+  S = { ...S, step: "frame", frameUrl: null, file: null, context: null, cover: null, previews: null, colourLabel: null, editing: null, wasReady: false, startRefUrl: null, refFile: null, refUrl: null };
   render();
 }
 
