@@ -118,5 +118,43 @@ def test_chat_ref_uses_imggen_default_and_fallbacks(monkeypatch):
 
     cut = client.get(f"/api/covers/{cid}/cut.png")
     assert cut.status_code == 200
-    img = Image.open(io.BytesIO(cut.content))
+
+
+def test_create_cover_with_ref_image_uses_imggen_and_skips_cutout(monkeypatch):
+    out_png = _png_bytes((30, 180, 90), (540, 960))
+    seen = {}
+
+    def fake_imggen(model: str, prompt: str, frame_bytes: bytes, ref_bytes: bytes) -> tuple[bytes, float]:
+        seen["model"] = model
+        seen["prompt"] = prompt
+        return out_png, 0.015
+
+    monkeypatch.setattr(imggen, "FAKE", fake_imggen)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/covers",
+        data={"context": '{"title": "PS5 Launch", "caption": "Available today"}'},
+        files={
+            "frame": ("frame.png", _png_bytes((10, 20, 30)), "image/png"),
+            "ref_image": ("ref.png", _png_bytes((200, 100, 50)), "image/png"),
+        },
+    )
+    assert resp.status_code == 201
+    created = resp.json()
+    cid = created["id"]
+    assert created["ref_image"] == f"/api/covers/{cid}/ref/ref-1.png"
+
+    done = client.get(f"/api/covers/{cid}").json()
+    assert done["status"] == "done"
+    assert done["ref_generated"] is True
+    assert done["cut_available"] is False
+    assert done["used_usd"] == 0.015
+    assert done["costs"] == [{"step": "generate", "model": "openai/gpt-image-2", "calls": 1, "ok": 1, "usd": 0.015}]
+    assert seen["model"] == "openai/gpt-image-2"
+    assert "PS5 Launch" in seen["prompt"]
+
+    plain = client.get(f"/api/covers/{cid}/plain.png")
+    assert plain.status_code == 200
+    img = Image.open(io.BytesIO(plain.content))
     assert img.size == (1080, 1920)
