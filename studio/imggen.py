@@ -37,17 +37,30 @@ STRICT RULES (100% FIDELITY):
 2. LAYOUT & STYLE CLONING (FROM IMAGE 2):
    - Copy IMAGE 2's exact composition, background style, typography, text outline/shadow, CTA pill/badge geometry, and color palette.
    - NEVER place any text, pill, badge, icon, or graphic over the subject's face or eyes.
-3. TEXT & HOOK:
-   - Use the exact headline copy below, spelled 100% accurately, crisp, high-contrast, with zero gibberish or extra watermarks."""
+3. TEXT & HOOK (MINIMAL TEXT ONLY):
+   - Match the exact amount and density of text shown in IMAGE 2 (typically 2–5 punchy words max, or just a logo/title if IMAGE 2 has minimal text).
+   - NEVER dump raw sentences, notes, transcripts, store addresses, or full captions onto the thumbnail.
+   - Only include extra or longer text if USER INSTRUCTION explicitly asks for specific words to be written on the image.
+   - All text must be crisp, spelled 100% accurately, high-contrast, with zero gibberish or watermarks."""
 
 
 def _build_prompt(c: dict[str, Any], message: str) -> str:
     sp = c.get("spec") or {}
     pill = " ".join(x for x in (sp.get("pill_left"), sp.get("pill_right")) if x)
-    lines = [BASE_PROMPT, f"HEADLINE COPY:\n- Small setup line: {sp.get('line1') or ''}\n- Big main headline: {sp.get('line2') or ''}\n- Highlight word: {sp.get('highlight') or ''}\n- CTA pill: {pill}"]
+    lines = [BASE_PROMPT]
+    if c.get("headlines") or (sp.get("line2") and sp.get("line2") != "Cover"):
+        lines.append(
+            f"HEADLINE COPY:\n- Small setup line: {sp.get('line1') or ''}\n"
+            f"- Big main headline: {sp.get('line2') or ''}\n"
+            f"- Highlight word: {sp.get('highlight') or ''}\n- CTA pill: {pill}"
+        )
     if c.get("context"):
-        lines.append(f"VIDEO CONTEXT:\n{c['context'][:1500]}")
-    if message.strip():
+        lines.append(
+            "VIDEO CONTEXT (background topic only — DO NOT print these raw notes onto the image; "
+            "distill into a short 2–5 word hook matching IMAGE 2's text amount unless the user explicitly asks for specific text):\n"
+            f"{c['context'][:1500]}"
+        )
+    if message.strip() and message.strip() != (c.get("context") or "").strip():
         lines.append(f"USER INSTRUCTION:\n{message.strip()}")
     return "\n\n".join(lines)
 
@@ -104,7 +117,7 @@ def _call_one(model: str, prompt: str, frame_bytes: bytes, ref_bytes: bytes) -> 
     return img_bytes, cost
 
 
-def generate_from_ref(cid: str, frame_bytes: bytes, ref_bytes: bytes, message: str) -> tuple[str, float, str]:
+def generate_from_ref(cid: str, frame_bytes: bytes, ref_bytes: bytes, message: str, step: str = "edit") -> tuple[str, float, str]:
     """Generate a new cover matching the reference image, saving cover-cut.png & cover-plain.png."""
     c = covers.load(cid)
     prompt = _build_prompt(c, message)
@@ -121,7 +134,7 @@ def generate_from_ref(cid: str, frame_bytes: bytes, ref_bytes: bytes, message: s
         t0 = time.monotonic()
         try:
             out_bytes, cost_usd = _call_one(model, prompt, frame_bytes, ref_bytes)
-            call = nebius.Call(step="edit", model=model, ok=True, usd=cost_usd, ms=int((time.monotonic() - t0) * 1000))
+            call = nebius.Call(step=step, model=model, ok=True, usd=cost_usd, ms=int((time.monotonic() - t0) * 1000))
             with covers.LOCK:
                 cur = covers.load(cid)
                 cur["calls"].append(call.dict())
@@ -130,14 +143,14 @@ def generate_from_ref(cid: str, frame_bytes: bytes, ref_bytes: bytes, message: s
             folder = covers.folder(cid)
             for name in covers.VERSIONS:
                 img.save(folder / f"cover-{name}.png", optimize=True)
-            covers.update(cid, version=cur["version"] + 1)
+            covers.update(cid, version=cur["version"] + 1, ref_generated=True)
             note = "Generated to match your reference image." + (
                 f" (fallback from {settings.imggen_model})" if idx > 0 else ""
             )
             return model, cost_usd, note
         except Exception as e:
             call = nebius.Call(
-                step="edit", model=model, ok=False, usd=0.0,
+                step=step, model=model, ok=False, usd=0.0,
                 ms=int((time.monotonic() - t0) * 1000), error=str(e)[:200],
             )
             with covers.LOCK:
