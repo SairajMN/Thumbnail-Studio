@@ -44,13 +44,13 @@ When a user finishes editing or generating a video and clicks **Export**, the vi
 | **1. Read** | Code (`YuNet`, `U²-Net-p`, `Tesseract`) | Detects faces, cuts out the main subject, extracts dominant colours, reads on-screen text (OCR). | Free |
 | **2. Look** | **Kimi K3** on Nebius (vision) | Identifies the game/subject, signature colours, product bounding box, strongest hook, and top 3 matching designs. | ~$0.007 |
 | **3. Write** | **GLM 5.3** on Nebius | Writes 3 headline options (`line1` + `highlight` word + `line2`, optional CTA pill, offer badge, arrow toggle) grounded in `<video_context>`. | ~$0.002 |
-| **4. Draw** | Code (`Pillow` + `NumPy`) | Applies punch-in, colour grade, subject outline/glow, ring & arrow, headline, PEGI label, and runs face-safety, contrast, and 3:4 grid checks. | Free |
+| **4. Draw** | Code (`Pillow` + `NumPy`) | Applies punch-in, colour grade, subject outline/glow, ring & arrow, headline, and runs face-safety, contrast, and 3:4 grid checks. | Free |
 
 ### Budget & Fallbacks
 - Every model call is checked against `BUDGET_USD` (default `$0.15`) **before** it runs using worst-case token pricing, so a cover never exceeds its budget.
 - Vision fallbacks stay on Nebius: `kimi-k3` → `kimi-k2.6` → `qwen3.8-27b` → `glm-5.3` / `glm-5.3-flash` (text-only from code-extracted facts).
 - Writing fallbacks: `glm-5.3` → `glm-5.2` → `glm-5.1` → `glm-5.3-flash`.
-- **Face-safe layout**: Nothing is ever drawn over a detected face—not words, pills, washes, rings, arrows, PEGI labels, or waves.
+- **Face-safe layout**: Nothing is ever drawn over a detected face—not words, pills, washes, rings, arrows, or waves.
 
 ---
 
@@ -204,4 +204,3 @@ uv run pytest
 
 - Face detection: [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet), OpenCV Zoo, MIT
 - Cut-out: [U²-Net-p](https://github.com/xuebinqin/U-2-Net), Apache-2.0 (distributed via [rembg](https://github.com/danielgatis/rembg))
-- PEGI labels and ratings: copied from Guideline Copilot's brand kit (`studio/kit`)

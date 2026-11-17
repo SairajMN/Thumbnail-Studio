@@ -24,7 +24,7 @@ It also includes [`agent.py`](agent.py), a drop-in post-export integration layer
 
 1. **Pre-call Budget Guardrail**: Every Nebius model call in `studio/covers.py:_ask()` checks `spent(c) + worst_case_usd <= budget_usd` (default `$0.15`) *before* sending the request. Never bypass `_ask()` for model calls.
 2. **Zero-Cost Code-Only Redraws**: Editing `Spec` fields (`PATCH /api/covers/{id}` or `covers.edit()`) redraws `cover-cut.png` and `cover-plain.png` deterministically in Python (`studio/design.py:draw()`) with **zero** LLM cost.
-3. **Face-Safe Layout**: `studio/design.py` ensures headlines, pills, washes, rings, arrows, PEGI labels, and waves never overlap detected faces (`studio/frame.py:faces()`).
+3. **Face-Safe Layout**: `studio/design.py` ensures headlines, pills, washes, rings, arrows, and waves never overlap detected faces (`studio/frame.py:faces()`).
 4. **Local File-Based State**: Each cover lives in `data/covers/<id>/` (`cover.json`, `frame.png`, `mask.npy`, `cover-cut.png`, `cover-plain.png`, `previews/`, `exports/`, `refs/`). Writes to `cover.json` are guarded by `studio/covers.py:LOCK`.
 5. **Test Isolation**: `tests/conftest.py` overrides `DATA_DIR` to a temp directory and clears `NEBIUS_API_KEY`. Tests use `nebius.FAKE` to stub model responses without network calls.
 
