@@ -94,9 +94,6 @@ It also includes [`agent.py`](agent.py), a drop-in post-export integration layer
   ```
 - **UI Video Context Box** ([`studio/static/index.html`](studio/static/index.html)): During the `context` step, the chat composer acts as a dedicated Video Context input box where users can paste plain video notes **or** the Video Editing Agent's JSON payload directly (with a **Paste Agent JSON** chip that pre-fills the schema above). `studio/covers.py:_context()` parses both JSON and plain text seamlessly.
 
-### G. Unified Standalone `imggen/` App (`imggen/`)
-- [`imggen/`](imggen/) is bundled in this same repository: a standalone black-and-white OpenRouter image-generation studio (`imggen/app.py`, `imggen/prompt.py`, `imggen/static/index.html`, `imggen/tests/test_app.py`) with `openai/gpt-image-2` default + `minimax/minimax-h3-image` / `openai/gpt-image-2.5-sunburst` fallbacks, model dropdown, `/api/history`, and hard `BUDGET_USD` + `MAX_CALLS` guardrails.
-
 ---
 
 ## 5. Running & Testing

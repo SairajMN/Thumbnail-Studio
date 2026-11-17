@@ -84,10 +84,6 @@ Open `http://127.0.0.1:8300`:
   - When `OPENROUTER_API_KEY` is set, `chat.say()` routes reference-image requests through `studio/imggen.py` (`openai/gpt-image-2` by default, falling back to `minimax/minimax-h3-image` → `openai/gpt-image-2.5-sunburst` only on failure) with strict `budget_usd` enforcement, saving the generated 1080×1920 image directly to `cover-cut.png` and `cover-plain.png`.
   - When only `NEBIUS_API_KEY` is set, `chat.say()` falls back to `VISION_EDIT_MODELS` (`kimi-k3` → `kimi-k2.6` → `qwen3.8-27b`) to map the reference look into `Plan` (`design`, `colors`, `pill_left`/`pill_right`, `punch_in`, `arrow`, `wave`).
 
-### Standalone `imggen/` App (OpenRouter Image Studio)
-
-This repository also includes [`imggen/`](imggen/) — a standalone black-and-white chatbot UI for direct OpenRouter image generation (`openai/gpt-image-2` default, `minimax/minimax-h3-image` and `openai/gpt-image-2.5-sunburst` fallbacks, plus a model selector, session history, strict `BUDGET_USD` + `MAX_CALLS` guardrails, and PNG download). See [`imggen/README.md`](imggen/README.md) to run it separately on port `8400`.
-
 ---
 
 ## Developer & Codex Integration (`agent.py`)
